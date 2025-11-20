@@ -1,0 +1,44 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  IDF_TARGET: esp32p4
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up ESP-IDF
+        uses: espressif/github-actions/setup-esp-idf@v1
+        with:
+          version: v5.3
+          tools-cache: ${{ runner.temp }}/esp-idf-tools
+
+      - name: Build
+        working-directory: .
+        run: |
+          idf.py build
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledbrain-firmware
+          path: |
+            build/ledbrain.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/flasher_args.json
+          if-no-files-found: error
