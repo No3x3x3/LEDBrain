@@ -2,6 +2,11 @@ name: Build firmware
 
 on:
   push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  push:
     tags:
       - "v*"
   workflow_dispatch:
@@ -53,5 +58,20 @@ jobs:
         with:
           files: artifacts/**
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish nightly assets from main
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**
+          tag_name: nightly
+          name: Nightly
+          prerelease: true
+          draft: false
+          generate_release_notes: false
+          overwrite: true
+          target_commitish: ${{ github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
