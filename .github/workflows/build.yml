@@ -2,43 +2,56 @@ name: Build firmware
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
+    tags:
+      - "v*"
   workflow_dispatch:
-
-env:
-  IDF_TARGET: esp32p4
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Set up ESP-IDF
-        uses: espressif/github-actions/setup-esp-idf@v1
+      - name: Setup ESP-IDF
+        uses: espressif/setup-idf@v1
         with:
-          version: v5.3
-          tools-cache: ${{ runner.temp }}/esp-idf-tools
+          version: v5.5.1
+          install-esp-idf-tools: true
+          targets: esp32p4
 
-      - name: Build
-        working-directory: .
+      - name: Build firmware and SPIFFS
+        shell: bash
         run: |
+          idf.py set-target esp32p4
           idf.py build
+          idf.py spiffs
 
-      - name: Upload firmware artifacts
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp build/ledbrain.bin artifacts/ || true
+          cp build/spiffs.bin artifacts/ || true
+          cp build/bootloader/bootloader.bin artifacts/ || true
+          cp build/partition_table/partition-table.bin artifacts/ || true
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ledbrain-firmware
-          path: |
-            build/ledbrain.bin
-            build/bootloader/bootloader.bin
-            build/partition_table/partition-table.bin
-            build/flasher_args.json
-          if-no-files-found: error
+          name: ledbrain-${{ github.ref_name }}
+          path: artifacts/**
+
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
