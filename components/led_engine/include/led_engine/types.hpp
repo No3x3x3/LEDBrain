@@ -37,10 +37,12 @@ struct LedSegmentConfig {
   std::string name{"Segment"};
   uint16_t start_index{0};
   uint16_t led_count{120};
+  uint16_t render_order{0};
   int gpio{-1};
   uint8_t rmt_channel{0};
   std::string chipset{"ws2812b"};
   std::string color_order{"GRB"};
+  std::string effect_source{"local"};
   bool enabled{true};
   bool reverse{false};
   bool mirror{false};
@@ -79,6 +81,32 @@ struct EffectAssignment {
   uint8_t intensity{128};
   uint8_t speed{128};
   std::string audio_mode{"spectrum"};
+  std::string direction{"forward"};
+  float scatter{0.0f};
+  uint16_t fade_in{0};
+  uint16_t fade_out{0};
+  std::string color1{"#ffffff"};
+  std::string color2{"#ff6600"};
+  std::string color3{"#0033ff"};
+  std::string palette{};
+  std::string gradient{};
+  uint8_t brightness_override{0};
+  float gamma_color{2.2f};
+  float gamma_brightness{2.2f};
+  std::string blend_mode{"normal"};
+  uint8_t layers{1};
+  std::string reactive_mode{"full"};
+  float band_gain_low{1.0f};
+  float band_gain_mid{1.0f};
+  float band_gain_high{1.0f};
+  float amplitude_scale{1.0f};
+  float brightness_compress{0.0f};
+  bool beat_response{false};
+  uint16_t attack_ms{25};
+  uint16_t release_ms{120};
+  std::string scene_preset{};
+  std::string scene_schedule{};
+  bool beat_shuffle{false};
 };
 
 struct EffectsConfig {

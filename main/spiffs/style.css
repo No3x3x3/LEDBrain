@@ -68,6 +68,18 @@ body {
   letter-spacing: 0.05em;
 }
 
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  background: rgba(255, 122, 184, 0.14);
+  border: 1px solid rgba(255, 122, 184, 0.35);
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
 .layout {
   flex: 1;
   display: flex;
@@ -495,6 +507,65 @@ nav button.active::after {
 .effects-table select {
   width: 100%;
   font-size: 0.78rem;
+}
+
+.effects-table input[type="number"] {
+  width: 5rem;
+}
+
+.effects-table tr.selected {
+  background: rgba(255, 122, 184, 0.08);
+}
+
+.effect-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.fx-segment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fx-group-title {
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.fx-group-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.fx-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.fx-grid input[type="color"] {
+  padding: 0.2rem;
+  height: 2.5rem;
+}
+
+.fx-grid input,
+.fx-grid select {
+  width: 100%;
+}
+
+.fx-segment-list .chip {
+  cursor: pointer;
+}
+
+.fx-segment-list .chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 .segments-table .matrix-fields {

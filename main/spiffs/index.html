@@ -188,17 +188,20 @@
                     <th id="colSegName">Name</th>
                     <th id="colSegLeds">LEDs</th>
                     <th id="colSegStart">Start</th>
+                    <th id="colSegOrder">Render order</th>
                     <th id="colSegPin">Pin</th>
                     <th id="colSegRmt">RMT</th>
                     <th id="colSegMatrix">Matrix</th>
                     <th id="colSegPower">Power (mA)</th>
+                    <th id="colSegSource">Effect source</th>
+                    <th id="colSegDirection">Reverse</th>
                     <th id="colSegEnabled">Enabled</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody id="segmentTableBody">
                   <tr class="placeholder">
-                    <td colspan="9" id="ledSegmentsEmpty">No segments yet</td>
+                    <td colspan="12" id="ledSegmentsEmpty">No segments yet</td>
                   </tr>
                 </tbody>
               </table>
@@ -255,6 +258,125 @@
               <button type="button" class="primary" id="btnSaveLed">Save LED config</button>
             </div>
           </article>
+
+          <div class="effect-detail-grid">
+            <article class="card slim">
+              <header class="card-header">
+                <div>
+                  <h3 id="fxSegmentsTitle">Lista segmentów</h3>
+                  <p class="muted" id="fxSegmentsSubtitle">Wybierz segment do edycji efektu.</p>
+                </div>
+                <div class="pill" id="fxSelectedLabel">-</div>
+              </header>
+              <div class="fx-segment-list" id="fxSegmentList"></div>
+            </article>
+
+            <article class="card slim">
+              <header class="card-header">
+                <div>
+                  <h3 id="fxSettingsTitle">Ustawienia efektu</h3>
+                  <p class="muted" id="fxSettingsSubtitle">Parametry prędkości, intensywności i kolorów.</p>
+                </div>
+              </header>
+              <div class="form-grid slim fx-grid">
+                <label for="fxDirection" id="lblFxDirection">Kierunek</label>
+                <select id="fxDirection">
+                  <option value="forward">Forward</option>
+                  <option value="backward">Backward</option>
+                  <option value="center_out">Center out</option>
+                  <option value="edges_in">Edges in</option>
+                </select>
+                <label for="fxScatter" id="lblFxScatter">Rozpraszanie</label>
+                <input type="number" id="fxScatter" min="0" max="100" step="1">
+                <label for="fxFadeIn" id="lblFxFadeIn">Fade-in (ms)</label>
+                <input type="number" id="fxFadeIn" min="0" max="5000">
+                <label for="fxFadeOut" id="lblFxFadeOut">Fade-out (ms)</label>
+                <input type="number" id="fxFadeOut" min="0" max="5000">
+                <label for="fxColor1" id="lblFxColor1">Kolor 1</label>
+                <input type="color" id="fxColor1" value="#ffffff">
+                <label for="fxColor2" id="lblFxColor2">Kolor 2</label>
+                <input type="color" id="fxColor2" value="#ff6600">
+                <label for="fxColor3" id="lblFxColor3">Kolor 3</label>
+                <input type="color" id="fxColor3" value="#0033ff">
+                <label for="fxPalette" id="lblFxPalette">Paleta</label>
+                <input id="fxPalette" placeholder="icy, sunset, fire">
+                <label for="fxGradient" id="lblFxGradient">Gradient</label>
+                <input id="fxGradient" placeholder="#000-#fff-#0ff">
+                <label for="fxBrightnessOverride" id="lblFxBrightnessOverride">Brightness override</label>
+                <input type="number" id="fxBrightnessOverride" min="0" max="255">
+                <label for="fxGammaColor" id="lblFxGammaColor">Gamma koloru</label>
+                <input type="number" id="fxGammaColor" step="0.1" min="0.5" max="4">
+                <label for="fxGammaBrightness" id="lblFxGammaBrightness">Gamma jasności</label>
+                <input type="number" id="fxGammaBrightness" step="0.1" min="0.5" max="4">
+                <label for="fxBlendMode" id="lblFxBlendMode">Mieszanie efektów</label>
+                <select id="fxBlendMode">
+                  <option value="normal">Normal</option>
+                  <option value="add">Add</option>
+                  <option value="screen">Screen</option>
+                  <option value="multiply">Multiply</option>
+                </select>
+                <label for="fxLayers" id="lblFxLayers">Warstwy</label>
+                <input type="number" id="fxLayers" min="1" max="8">
+              </div>
+            </article>
+
+            <article class="card slim">
+              <header class="card-header">
+                <div>
+                  <h3 id="fxAudioTitle">Efekty audio-reaktywne</h3>
+                  <p class="muted" id="fxAudioSubtitle">Czułość pasm, beat i dynamika.</p>
+                </div>
+              </header>
+              <div class="form-grid slim fx-grid">
+                <label for="fxReactiveMode" id="lblFxReactiveMode">Tryb reakcji</label>
+                <select id="fxReactiveMode">
+                  <option value="full">Full spectrum</option>
+                  <option value="bass">Bass</option>
+                  <option value="mids">Mids</option>
+                  <option value="treble">Treble</option>
+                </select>
+                <label for="fxSensBass" id="lblFxSensBass">Czułość bass</label>
+                <input type="number" id="fxSensBass" step="0.05" min="0" max="5">
+                <label for="fxSensMids" id="lblFxSensMids">Czułość mids</label>
+                <input type="number" id="fxSensMids" step="0.05" min="0" max="5">
+                <label for="fxSensTreble" id="lblFxSensTreble">Czułość treble</label>
+                <input type="number" id="fxSensTreble" step="0.05" min="0" max="5">
+                <label for="fxAmplitude" id="lblFxAmplitude">Skalowanie amplitudy</label>
+                <input type="number" id="fxAmplitude" step="0.05" min="0" max="5">
+                <label for="fxBrightnessCompress" id="lblFxBrightnessCompress">Kompresja jasności</label>
+                <input type="number" id="fxBrightnessCompress" step="0.05" min="0" max="5">
+                <label for="fxBeatResponse" id="lblFxBeatResponse">Reakcja na beat</label>
+                <label class="switch compact">
+                  <input type="checkbox" id="fxBeatResponse">
+                  <span></span>
+                </label>
+                <label for="fxAttack" id="lblFxAttack">Attack (ms)</label>
+                <input type="number" id="fxAttack" min="0" max="1000">
+                <label for="fxRelease" id="lblFxRelease">Release (ms)</label>
+                <input type="number" id="fxRelease" min="0" max="2000">
+              </div>
+            </article>
+
+            <article class="card slim">
+              <header class="card-header">
+                <div>
+                  <h3 id="fxSceneTitle">Presety i sceny</h3>
+                  <p class="muted" id="fxSceneSubtitle">Szybkie zapisy i przełączanie na beat.</p>
+                </div>
+              </header>
+              <div class="form-grid slim fx-grid">
+                <label for="fxScenePreset" id="lblFxScenePreset">Preset</label>
+                <input id="fxScenePreset" placeholder="sunset, chillout">
+                <label for="fxSceneSchedule" id="lblFxSceneSchedule">Harmonogram</label>
+                <input id="fxSceneSchedule" placeholder="18:00-23:30, weekend">
+                <label for="fxBeatShuffle" id="lblFxBeatShuffle">Przełączanie na beat</label>
+                <label class="switch compact">
+                  <input type="checkbox" id="fxBeatShuffle">
+                  <span></span>
+                </label>
+              </div>
+            </article>
+          </div>
         </div>
 
         <div class="led-pane" id="config-audio-pane">

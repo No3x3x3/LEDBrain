@@ -8,6 +8,7 @@ const state = {
   ledState: { enabled: false, autostart: false },
   timers: { info: null, wled: null, uptime: null },
   lastInfoRefresh: 0,
+  selectedFxSegment: null,
 };
 
 const T = {};
@@ -161,10 +162,13 @@ function renderLang() {
     colSegName: "col_seg_name",
     colSegLeds: "col_seg_leds",
     colSegStart: "col_seg_start",
+    colSegOrder: "col_seg_order",
     colSegPin: "col_seg_pin",
     colSegRmt: "col_seg_rmt",
     colSegMatrix: "col_seg_matrix",
     colSegPower: "col_seg_power",
+    colSegSource: "col_seg_source",
+    colSegDirection: "col_seg_direction",
     colSegEnabled: "col_seg_enabled",
     ledSegmentsEmpty: "led_segments_empty",
     segmentHint: "segment_hint",
@@ -207,6 +211,41 @@ function renderLang() {
     lightsGroupWled: "lights_group_wled",
     lightsGroupPhysical: "lights_group_physical",
     lightsGroupVirtual: "lights_group_virtual",
+    wledEmptyHint: "wled_empty_hint",
+    fxSegmentsTitle: "fx_segments_title",
+    fxSegmentsSubtitle: "fx_segments_subtitle",
+    fxSettingsTitle: "fx_settings_title",
+    fxSettingsSubtitle: "fx_settings_subtitle",
+    fxAudioTitle: "fx_audio_title",
+    fxAudioSubtitle: "fx_audio_subtitle",
+    fxSceneTitle: "fx_scene_title",
+    fxSceneSubtitle: "fx_scene_subtitle",
+    lblFxDirection: "fx_direction",
+    lblFxScatter: "fx_scatter",
+    lblFxFadeIn: "fx_fade_in",
+    lblFxFadeOut: "fx_fade_out",
+    lblFxColor1: "fx_color1",
+    lblFxColor2: "fx_color2",
+    lblFxColor3: "fx_color3",
+    lblFxPalette: "fx_palette",
+    lblFxGradient: "fx_gradient",
+    lblFxBrightnessOverride: "fx_brightness_override",
+    lblFxGammaColor: "fx_gamma_color",
+    lblFxGammaBrightness: "fx_gamma_brightness",
+    lblFxBlendMode: "fx_blend_mode",
+    lblFxLayers: "fx_layers",
+    lblFxReactiveMode: "fx_reactive_mode",
+    lblFxSensBass: "fx_sens_bass",
+    lblFxSensMids: "fx_sens_mids",
+    lblFxSensTreble: "fx_sens_treble",
+    lblFxAmplitude: "fx_amplitude_scale",
+    lblFxBrightnessCompress: "fx_brightness_compress",
+    lblFxBeatResponse: "fx_beat_response",
+    lblFxAttack: "fx_attack",
+    lblFxRelease: "fx_release",
+    lblFxScenePreset: "fx_scene_preset",
+    lblFxSceneSchedule: "fx_scene_schedule",
+    lblFxBeatShuffle: "fx_beat_shuffle",
     wledTitle: "wled_title",
     wledSubtitle: "wled_subtitle",
     wledTableName: "wled_table_name",
@@ -872,6 +911,10 @@ function ensureLedEngineConfig() {
     seg.id = seg.id || `segment-${idx + 1}`;
     seg.matrix = seg.matrix || { width: 0, height: 0, serpentine: true, vertical: false };
     seg.audio = seg.audio || defaultSegmentAudio();
+    if (typeof seg.render_order !== "number" || Number.isNaN(seg.render_order)) {
+      seg.render_order = idx;
+    }
+    seg.effect_source = seg.effect_source || "local";
   });
   led.audio = led.audio || defaultAudioConfig();
   led.audio.snapcast = led.audio.snapcast || defaultAudioConfig().snapcast;
@@ -937,6 +980,8 @@ function createSegmentTemplate() {
     matrix_enabled: false,
     matrix: { width: 0, height: 0, serpentine: true, vertical: false },
     power_limit_ma: 0,
+    render_order: index - 1,
+    effect_source: "local",
     audio: defaultSegmentAudio(),
   };
 }
@@ -957,6 +1002,32 @@ function ensureEffectAssignment(segmentId) {
       intensity: 128,
       speed: 128,
       audio_mode: "spectrum",
+      direction: "forward",
+      scatter: 0,
+      fade_in: 0,
+      fade_out: 0,
+      color1: "#ffffff",
+      color2: "#ff6600",
+      color3: "#0033ff",
+      palette: "",
+      gradient: "",
+      brightness_override: 0,
+      gamma_color: 2.2,
+      gamma_brightness: 2.2,
+      blend_mode: "normal",
+      layers: 1,
+      reactive_mode: "full",
+      band_gain_low: 1,
+      band_gain_mid: 1,
+      band_gain_high: 1,
+      amplitude_scale: 1,
+      brightness_compress: 0,
+      beat_response: false,
+      attack_ms: 25,
+      release_ms: 120,
+      scene_preset: "",
+      scene_schedule: "",
+      beat_shuffle: false,
     };
     led.effects.assignments.push(assignment);
   }
@@ -964,6 +1035,41 @@ function ensureEffectAssignment(segmentId) {
   assignment.intensity = typeof assignment.intensity === "number" ? assignment.intensity : 128;
   assignment.speed = typeof assignment.speed === "number" ? assignment.speed : 128;
   assignment.audio_mode = assignment.audio_mode || "spectrum";
+  assignment.direction = assignment.direction || "forward";
+  assignment.scatter = typeof assignment.scatter === "number" ? assignment.scatter : 0;
+  assignment.fade_in = typeof assignment.fade_in === "number" ? assignment.fade_in : 0;
+  assignment.fade_out = typeof assignment.fade_out === "number" ? assignment.fade_out : 0;
+  assignment.color1 = assignment.color1 || "#ffffff";
+  assignment.color2 = assignment.color2 || "#ff6600";
+  assignment.color3 = assignment.color3 || "#0033ff";
+  assignment.palette = assignment.palette || "";
+  assignment.gradient = assignment.gradient || "";
+  assignment.brightness_override =
+    typeof assignment.brightness_override === "number" ? assignment.brightness_override : 0;
+  assignment.gamma_color = Number.isFinite(assignment.gamma_color) ? assignment.gamma_color : 2.2;
+  assignment.gamma_brightness = Number.isFinite(assignment.gamma_brightness)
+    ? assignment.gamma_brightness
+    : 2.2;
+  assignment.blend_mode = assignment.blend_mode || "normal";
+  assignment.layers = typeof assignment.layers === "number" ? assignment.layers : 1;
+  assignment.reactive_mode = assignment.reactive_mode || "full";
+  assignment.band_gain_low = Number.isFinite(assignment.band_gain_low) ? assignment.band_gain_low : 1;
+  assignment.band_gain_mid = Number.isFinite(assignment.band_gain_mid) ? assignment.band_gain_mid : 1;
+  assignment.band_gain_high = Number.isFinite(assignment.band_gain_high)
+    ? assignment.band_gain_high
+    : 1;
+  assignment.amplitude_scale = Number.isFinite(assignment.amplitude_scale)
+    ? assignment.amplitude_scale
+    : 1;
+  assignment.brightness_compress = Number.isFinite(assignment.brightness_compress)
+    ? assignment.brightness_compress
+    : 0;
+  assignment.beat_response = Boolean(assignment.beat_response);
+  assignment.attack_ms = Number.isFinite(assignment.attack_ms) ? assignment.attack_ms : 25;
+  assignment.release_ms = Number.isFinite(assignment.release_ms) ? assignment.release_ms : 120;
+  assignment.scene_preset = assignment.scene_preset || "";
+  assignment.scene_schedule = assignment.scene_schedule || "";
+  assignment.beat_shuffle = Boolean(assignment.beat_shuffle);
   return assignment;
 }
 
@@ -1093,6 +1199,7 @@ function renderSegmentTable(led) {
         <td><input class="segment-field" data-field="name" data-idx="${idx}" value="${seg.name || ""}"></td>
         <td><input type="number" min="0" class="segment-field" data-field="led_count" data-idx="${idx}" value="${seg.led_count ?? 0}"></td>
         <td><input type="number" min="0" class="segment-field" data-field="start_index" data-idx="${idx}" value="${seg.start_index ?? 0}"></td>
+        <td><input type="number" min="0" class="segment-field" data-field="render_order" data-idx="${idx}" value="${seg.render_order ?? idx}"></td>
         <td>
           <select class="segment-pin" data-idx="${idx}">
             ${pinOptions}
@@ -1111,6 +1218,20 @@ function renderSegmentTable(led) {
           </div>
         </td>
         <td><input type="number" min="0" class="segment-field" data-field="power_limit_ma" data-idx="${idx}" value="${seg.power_limit_ma ?? 0}"></td>
+        <td>
+          <select class="segment-field" data-field="effect_source" data-idx="${idx}">
+            <option value="local" ${seg.effect_source === "local" ? "selected" : ""}>Local</option>
+            <option value="wled" ${seg.effect_source === "wled" ? "selected" : ""}>WLED</option>
+            <option value="ledfx" ${seg.effect_source === "ledfx" ? "selected" : ""}>LEDFx</option>
+            <option value="global" ${seg.effect_source === "global" ? "selected" : ""}>Global</option>
+          </select>
+        </td>
+        <td>
+          <label class="switch compact">
+            <input type="checkbox" class="segment-field" data-field="reverse" data-idx="${idx}" ${seg.reverse ? "checked" : ""}>
+            <span></span>
+          </label>
+        </td>
         <td>
           <label class="switch compact">
             <input type="checkbox" class="segment-field" data-field="enabled" data-idx="${idx}" ${seg.enabled ? "checked" : ""}>
@@ -1199,6 +1320,184 @@ function renderEffectRows(led) {
     })
     .join("");
   body.innerHTML = rows;
+  const segIds = led.segments.map((s) => s.id);
+  if (!state.selectedFxSegment || !segIds.includes(state.selectedFxSegment)) {
+    state.selectedFxSegment = segIds[0] || null;
+  }
+  highlightEffectSelection();
+  renderFxSegmentList();
+  renderFxDetail();
+}
+
+function setSelectedFxSegment(segId) {
+  if (!segId) return;
+  state.selectedFxSegment = segId;
+  highlightEffectSelection();
+  renderFxDetail();
+}
+
+function highlightEffectSelection() {
+  const rows = document.querySelectorAll("#effectsTableBody tr[data-segid]");
+  rows.forEach((row) => {
+    row.classList.toggle("selected", row.dataset.segid === state.selectedFxSegment);
+  });
+  const chips = document.querySelectorAll("#fxSegmentList button[data-segid]");
+  chips.forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.segid === state.selectedFxSegment);
+  });
+}
+
+function renderFxSegmentList() {
+  const container = qs("fxSegmentList");
+  if (!container) return;
+  const led = ensureLedEngineConfig();
+  const physical = (led?.segments || []).map(
+    (seg) => `<button class="chip ghost ${state.selectedFxSegment === seg.id ? "active" : ""}" data-segid="${seg.id}">
+      ${seg.name || seg.id} <span class="muted">(${seg.led_count || 0} LED)</span>
+    </button>`
+  );
+  const wled = (state.wledDevices || []).map(
+    (dev) => `<div class="chip muted" title="${dev.address || ""}">${dev.name || dev.id} · ${dev.segments || 1} seg</div>`
+  );
+  container.innerHTML = `
+    <div class="fx-group">
+      <div class="fx-group-title">${t("lights_group_physical") || "Physical"}</div>
+      <div class="fx-group-body">${physical.join("") || `<span class="muted">${t("led_segments_empty")}</span>`}</div>
+    </div>
+    <div class="fx-group">
+      <div class="fx-group-title">${t("lights_group_wled") || "WLED"}</div>
+      <div class="fx-group-body">${wled.join("") || `<span class="muted">${t("wled_empty_hint") || "-"}</span>`}</div>
+    </div>
+  `;
+}
+
+function renderFxDetail() {
+  const led = ensureLedEngineConfig();
+  if (!led) return;
+  const seg = led.segments.find((s) => s.id === state.selectedFxSegment);
+  const output = qs("fxSelectedLabel");
+  if (!seg) {
+    if (output) output.textContent = t("not_set");
+    return;
+  }
+  const assign = ensureEffectAssignment(seg.id);
+  if (output) {
+    output.textContent = `${seg.name || seg.id} • ${seg.led_count || 0} LED`;
+  }
+  const map = {
+    fxDirection: assign.direction,
+    fxScatter: assign.scatter,
+    fxFadeIn: assign.fade_in,
+    fxFadeOut: assign.fade_out,
+    fxColor1: assign.color1,
+    fxColor2: assign.color2,
+    fxColor3: assign.color3,
+    fxPalette: assign.palette,
+    fxGradient: assign.gradient,
+    fxBrightnessOverride: assign.brightness_override,
+    fxGammaColor: assign.gamma_color,
+    fxGammaBrightness: assign.gamma_brightness,
+    fxBlendMode: assign.blend_mode,
+    fxLayers: assign.layers,
+    fxReactiveMode: assign.reactive_mode,
+    fxSensBass: assign.band_gain_low,
+    fxSensMids: assign.band_gain_mid,
+    fxSensTreble: assign.band_gain_high,
+    fxAmplitude: assign.amplitude_scale,
+    fxBrightnessCompress: assign.brightness_compress,
+    fxBeatResponse: assign.beat_response,
+    fxAttack: assign.attack_ms,
+    fxRelease: assign.release_ms,
+    fxScenePreset: assign.scene_preset,
+    fxSceneSchedule: assign.scene_schedule,
+    fxBeatShuffle: assign.beat_shuffle,
+  };
+  Object.entries(map).forEach(([id, value]) => {
+    const el = qs(id);
+    if (!el) return;
+    if (el.type === "checkbox") {
+      el.checked = Boolean(value);
+    } else {
+      el.value = value ?? "";
+    }
+  });
+}
+
+function getSelectedFxAssignment() {
+  if (!state.selectedFxSegment) return null;
+  return ensureEffectAssignment(state.selectedFxSegment);
+}
+
+function handleEffectRowClick(event) {
+  const row = event.target.closest("tr[data-segid]");
+  if (!row) return;
+  setSelectedFxSegment(row.dataset.segid);
+}
+
+function handleFxSegmentChipClick(event) {
+  const btn = event.target.closest("button[data-segid]");
+  if (!btn) return;
+  setSelectedFxSegment(btn.dataset.segid);
+}
+
+function handleFxDetailChange(event) {
+  const assign = getSelectedFxAssignment();
+  if (!assign) return;
+  const map = {
+    fxDirection: "direction",
+    fxScatter: "scatter",
+    fxFadeIn: "fade_in",
+    fxFadeOut: "fade_out",
+    fxColor1: "color1",
+    fxColor2: "color2",
+    fxColor3: "color3",
+    fxPalette: "palette",
+    fxGradient: "gradient",
+    fxBrightnessOverride: "brightness_override",
+    fxGammaColor: "gamma_color",
+    fxGammaBrightness: "gamma_brightness",
+    fxBlendMode: "blend_mode",
+    fxLayers: "layers",
+    fxReactiveMode: "reactive_mode",
+    fxSensBass: "band_gain_low",
+    fxSensMids: "band_gain_mid",
+    fxSensTreble: "band_gain_high",
+    fxAmplitude: "amplitude_scale",
+    fxBrightnessCompress: "brightness_compress",
+    fxBeatResponse: "beat_response",
+    fxAttack: "attack_ms",
+    fxRelease: "release_ms",
+    fxScenePreset: "scene_preset",
+    fxSceneSchedule: "scene_schedule",
+    fxBeatShuffle: "beat_shuffle",
+  };
+  const field = map[event.target.id];
+  if (!field) return;
+  let value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
+  const numericFields = [
+    "scatter",
+    "fade_in",
+    "fade_out",
+    "brightness_override",
+    "gamma_color",
+    "gamma_brightness",
+    "layers",
+    "band_gain_low",
+    "band_gain_mid",
+    "band_gain_high",
+    "amplitude_scale",
+    "brightness_compress",
+    "attack_ms",
+    "release_ms",
+  ];
+  if (numericFields.includes(field)) {
+    const parsed = event.target.type === "number" ? parseFloat(value) : parseFloat(value);
+    value = Number.isFinite(parsed) ? parsed : 0;
+    if (["layers", "brightness_override"].includes(field)) {
+      value = Math.max(0, Math.min(value, field === "layers" ? 8 : 255));
+    }
+  }
+  assign[field] = value;
 }
 
 function renderAudioModeOptions(selected) {
@@ -1298,13 +1597,13 @@ function handleSegmentInput(event) {
   const seg = led.segments[idx];
   if (!seg || !field) return;
   let value = target.type === "checkbox" ? target.checked : target.value;
-  if (["led_count", "start_index", "rmt_channel", "power_limit_ma"].includes(field)) {
+  if (["led_count", "start_index", "rmt_channel", "power_limit_ma", "render_order"].includes(field)) {
     value = parseInt(value, 10);
     if (Number.isNaN(value)) value = 0;
     if (field === "rmt_channel") {
       value = Math.max(0, Math.min(value, 7));
     }
-    if (field === "led_count" || field === "start_index" || field === "power_limit_ma") {
+    if (["led_count", "start_index", "power_limit_ma", "render_order"].includes(field)) {
       value = Math.max(0, value);
     }
   }
@@ -1806,6 +2105,7 @@ function initEvents() {
   if (fxBody) {
     fxBody.addEventListener("input", handleEffectInput);
     fxBody.addEventListener("change", handleEffectInput);
+    fxBody.addEventListener("click", handleEffectRowClick);
   }
   const btnAddSegment = qs("btnAddSegment");
   if (btnAddSegment) {
@@ -1824,6 +2124,43 @@ function initEvents() {
       }
     });
   }
+  const fxSegmentList = qs("fxSegmentList");
+  if (fxSegmentList) {
+    fxSegmentList.addEventListener("click", handleFxSegmentChipClick);
+  }
+  [
+    "fxDirection",
+    "fxScatter",
+    "fxFadeIn",
+    "fxFadeOut",
+    "fxColor1",
+    "fxColor2",
+    "fxColor3",
+    "fxPalette",
+    "fxGradient",
+    "fxBrightnessOverride",
+    "fxGammaColor",
+    "fxGammaBrightness",
+    "fxBlendMode",
+    "fxLayers",
+    "fxReactiveMode",
+    "fxSensBass",
+    "fxSensMids",
+    "fxSensTreble",
+    "fxAmplitude",
+    "fxBrightnessCompress",
+    "fxBeatResponse",
+    "fxAttack",
+    "fxRelease",
+    "fxScenePreset",
+    "fxSceneSchedule",
+    "fxBeatShuffle",
+  ].forEach((id) => {
+    const el = qs(id);
+    if (!el) return;
+    const evt = el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input";
+    el.addEventListener(evt, handleFxDetailChange);
+  });
   [
     "audioSource",
     "audioSampleRate",

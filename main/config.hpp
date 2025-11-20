@@ -40,7 +40,7 @@ struct AppConfig {
   bool autostart{false};
   std::vector<WledDeviceConfig> wled_devices{};
   LedHardwareConfig led_engine{};
-  uint32_t schema_version{4};
+  uint32_t schema_version{5};
 };
 
 esp_err_t config_service_init();
