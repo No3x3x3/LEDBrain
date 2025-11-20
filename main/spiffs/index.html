@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>LEDBrain Setup</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>LEDBrain</h1>
+      <span id="chipVersion" class="muted">Firmware</span>
+    </div>
+    <div class="top-actions">
+      <div class="chip" id="chipIp">IP: --</div>
+      <button id="btnPlayback" class="primary subtle" data-state="stopped" disabled>Start output</button>
+      <button id="btnRefresh" class="ghost icon-only" aria-label="Refresh" title="Refresh">
+        <span aria-hidden="true">↻</span>
+      </button>
+      <button id="btnReboot" class="danger">Reboot</button>
+    </div>
+  </header>
+
+  <div id="statusBar" class="status hidden"></div>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="lang-switcher">
+        <label id="lblLang" for="langSwitch">Language</label>
+        <select id="langSwitch">
+          <option value="pl">Polski</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+      <nav>
+        <button data-tab="overview" id="navOverview" class="active">Lights</button>
+        <button data-tab="led" id="navLed">Devices</button>
+        <button data-tab="network" id="navNetwork">Network</button>
+        <button data-tab="mqtt" id="navMqtt">MQTT</button>
+        <button data-tab="system" id="navSystem">System</button>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section id="overview" class="view active">
+        <header>
+          <h2 id="overviewTitle">Device dashboard</h2>
+          <p id="overviewSubtitle" class="muted">Status summary and quick actions.</p>
+        </header>
+        <div class="lights-dashboard">
+          <section class="lights-group">
+            <div class="lights-group-header">
+              <h3 id="lightsGroupWled">WLED controllers</h3>
+              <span id="lightsGroupWledCount" class="muted">0</span>
+            </div>
+            <div class="lights-grid" id="lightsGridWled"></div>
+          </section>
+          <section class="lights-group">
+            <div class="lights-group-header">
+              <h3 id="lightsGroupPhysical">Physical outputs</h3>
+              <span id="lightsGroupPhysicalCount" class="muted">0</span>
+            </div>
+            <div class="lights-grid" id="lightsGridPhysical"></div>
+          </section>
+          <section class="lights-group">
+            <div class="lights-group-header">
+              <h3 id="lightsGroupVirtual">Virtual segments</h3>
+              <span id="lightsGroupVirtualCount" class="muted">0</span>
+            </div>
+            <div class="lights-grid" id="lightsGridVirtual"></div>
+          </section>
+        </div>
+        <div class="cards">
+          <article class="card">
+            <header>
+              <h3 id="statusCardTitle">Runtime</h3>
+              <span class="badge" id="badgeStatus">—</span>
+            </header>
+            <dl class="kv">
+              <div><dt id="lblDevice">Device name</dt><dd id="valDevice">—</dd></div>
+              <div><dt id="lblFirmware">Firmware</dt><dd id="valFirmware">—</dd></div>
+              <div><dt id="lblUptime">Uptime</dt><dd id="valUptime">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="card">
+            <header>
+              <h3 id="networkCardTitle">Network</h3>
+              <span class="badge" id="badgeNetwork">—</span>
+            </header>
+            <dl class="kv">
+              <div><dt id="lblIp">IP address</dt><dd id="valIp">—</dd></div>
+              <div><dt id="lblGateway">Gateway</dt><dd id="valGateway">—</dd></div>
+              <div><dt id="lblDns">DNS</dt><dd id="valDns">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="card">
+            <header>
+              <h3 id="mqttCardTitle">MQTT bridge</h3>
+              <span class="badge" id="badgeMqtt">—</span>
+            </header>
+            <dl class="kv">
+              <div><dt id="lblMqttServer">Server</dt><dd id="valMqttServer">—</dd></div>
+              <div><dt id="lblMqttUser">User</dt><dd id="valMqttUser">—</dd></div>
+              <div><dt id="lblDdp">DDP target</dt><dd id="valDdp">—</dd></div>
+            </dl>
+            <div class="card-actions">
+              <button id="btnOpenHA" class="ghost">Open Home Assistant</button>
+              <button id="btnMqttTest" class="ghost">Test publish</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="led" class="view">
+        <header>
+          <h2 id="ledTitle">LED engine</h2>
+          <p id="ledSubtitle" class="muted">Hardware layout, audio binding and effect sources.</p>
+        </header>
+        <div class="subnav" id="ledSubnav">
+          <button data-target="config-power-pane" id="tabConfigPower" class="active">Power</button>
+          <button data-target="config-segments-pane" id="tabConfigSegments">Segments</button>
+          <button data-target="config-audio-pane" id="tabConfigAudio">Audio</button>
+          <button data-target="config-virtual-pane" id="tabConfigVirtual">Virtual segments</button>
+          <button data-target="config-wled-pane" id="tabConfigWled">WLED</button>
+        </div>
+
+        <div class="led-pane active" id="config-power-pane">
+          <article class="card form-card slim">
+            <header>
+              <h3 id="ledDriverTitle">Driver &amp; power budget</h3>
+              <p id="ledDriverSubtitle" class="muted">Tune frame rate and keep the PSU within limits.</p>
+            </header>
+            <div class="form-grid slim">
+              <label for="ledDriver" id="lblDriver">Driver</label>
+              <select id="ledDriver">
+                <option value="esp_rmt">ESP RMT</option>
+                <option value="neopixelbus">NeoPixelBus</option>
+                <option value="external">External</option>
+              </select>
+              <label for="maxFps" id="lblMaxFps">Target FPS</label>
+              <input id="maxFps" type="number" min="1" max="240">
+              <label for="psuVoltage" id="lblPsuVoltage">PSU voltage (V)</label>
+              <input id="psuVoltage" type="number" min="2" max="48" step="0.1">
+              <label for="psuWatts" id="lblPsuWatts">PSU power (W)</label>
+              <input id="psuWatts" type="number" min="0" max="500" step="1">
+              <label id="lblAutoPowerLimit">Auto current from PSU</label>
+              <label class="switch compact">
+                <input type="checkbox" id="autoPowerLimit">
+                <span></span>
+              </label>
+              <label for="currentLimit" id="lblCurrentLimit">Current limit (mA)</label>
+              <input id="currentLimit" type="number" min="0" max="20000">
+              <label for="parallelOutputs" id="lblParallelOutputs">Parallel outputs</label>
+              <input id="parallelOutputs" type="number" min="1" max="8">
+              <label id="lblDedicatedCore">Dedicated core</label>
+              <label class="switch compact">
+                <input type="checkbox" id="dedicatedCore">
+                <span></span>
+              </label>
+              <label id="lblEnableDma">DMA acceleration</label>
+              <label class="switch compact">
+                <input type="checkbox" id="enableDma">
+                <span></span>
+              </label>
+            </div>
+            <p class="form-hint" id="psuHint">Feed LEDs directly from the PSU and share ground with the controller.</p>
+            <p class="power-summary" id="powerSummary"></p>
+          </article>
+        </div>
+
+        <div class="led-pane" id="config-segments-pane">
+          <article class="card">
+            <header class="card-header">
+              <div>
+                <h3 id="ledSegmentsTitle">Physical segments</h3>
+                <p class="muted" id="segmentHint">Match each strip with the same order as in WLED.</p>
+              </div>
+              <button id="btnAddSegment" class="ghost small">Add segment</button>
+            </header>
+            <div class="table-wrapper">
+              <table class="segments-table">
+                <thead>
+                  <tr>
+                    <th id="colSegName">Name</th>
+                    <th id="colSegLeds">LEDs</th>
+                    <th id="colSegStart">Start</th>
+                    <th id="colSegPin">Pin</th>
+                    <th id="colSegRmt">RMT</th>
+                    <th id="colSegMatrix">Matrix</th>
+                    <th id="colSegPower">Power (mA)</th>
+                    <th id="colSegEnabled">Enabled</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="segmentTableBody">
+                  <tr class="placeholder">
+                    <td colspan="9" id="ledSegmentsEmpty">No segments yet</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="form-hint" id="ledPowerHint">Pins deliver only data. Power strips from the PSU and use common ground.</p>
+          </article>
+        </div>
+
+        <div class="led-pane" id="config-virtual-pane">
+          <article class="card">
+            <header class="card-header">
+              <div>
+                <h3 id="effectsTitle">Effects & audio gain</h3>
+                <p class="muted" id="effectsSubtitle">Group segments and assign engines.</p>
+              </div>
+              <div class="inline-field">
+                <label for="defaultEffectEngine" id="lblDefaultEngine">Default engine</label>
+                <select id="defaultEffectEngine">
+                  <option value="wled">WLED</option>
+                  <option value="ledfx">LedFx</option>
+                </select>
+              </div>
+            </header>
+            <div class="table-wrapper">
+              <table class="effects-table">
+                <thead>
+                  <tr>
+                    <th id="colFxSegment">Segment</th>
+                    <th id="colFxEngine">Engine</th>
+                    <th id="colFxEffect">Effect</th>
+                    <th id="colFxPreset">Preset</th>
+                    <th id="colFxBrightness">Brightness</th>
+                    <th id="colFxIntensity">Intensity</th>
+                    <th id="colFxSpeed">Speed</th>
+                    <th id="colFxAudioMode">Audio mode</th>
+                    <th id="colFxAudioProfile">Audio profile</th>
+                    <th id="colFxAudioLink">Audio link</th>
+                    <th id="colFxStereo">Stereo split</th>
+                    <th id="colFxGainL">Gain L</th>
+                    <th id="colFxGainR">Gain R</th>
+                    <th id="colFxSensitivity">Sensitivity</th>
+                    <th id="colFxThreshold">Threshold</th>
+                    <th id="colFxSmoothing">Smoothing</th>
+                  </tr>
+                </thead>
+                <tbody id="effectsTableBody">
+                  <tr class="placeholder">
+                    <td colspan="16" id="ledFxEmpty">Add a segment to configure effects</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="form-actions end">
+              <button type="button" class="primary" id="btnSaveLed">Save LED config</button>
+            </div>
+          </article>
+        </div>
+
+        <div class="led-pane" id="config-audio-pane">
+          <article class="card form-card slim">
+            <header>
+              <h3 id="audioTitle">Audio input</h3>
+              <p id="audioSubtitle" class="muted">Snapcast or local capture with per-channel sensitivity.</p>
+            </header>
+            <div class="form-grid slim">
+              <label for="audioSource" id="lblAudioSource">Source</label>
+              <select id="audioSource">
+                <option value="none">None</option>
+                <option value="snapcast">Snapcast</option>
+                <option value="line_in">Line-in</option>
+              </select>
+              <label for="audioSampleRate" id="lblAudioSampleRate">Sample rate</label>
+              <input id="audioSampleRate" type="number" min="8000" max="96000" step="1000">
+              <label for="audioFft" id="lblAudioFft">FFT size</label>
+              <input id="audioFft" type="number" min="64" max="4096" step="64">
+              <label for="audioFrame" id="lblAudioFrame">Frame (ms)</label>
+              <input id="audioFrame" type="number" min="5" max="100">
+              <label for="audioSensitivity" id="lblAudioSensitivity">Sensitivity</label>
+              <input id="audioSensitivity" type="number" min="0.1" max="5" step="0.1">
+              <label for="audioStereo" id="lblAudioStereo">Stereo</label>
+              <label class="switch compact">
+                <input type="checkbox" id="audioStereo">
+                <span></span>
+              </label>
+            </div>
+            <div class="form-hint" id="audioHint">Audio frames from Snapcast keep LED beats in sync with the room.</div>
+          </article>
+
+          <article class="card form-card slim">
+            <header>
+              <h3 id="snapcastTitle">Snapcast link</h3>
+              <p id="snapcastSubtitle" class="muted">Configure transport for remote audio capture.</p>
+            </header>
+            <div class="form-grid slim">
+              <label for="snapHost" id="lblSnapHost">Snapcast host</label>
+              <input id="snapHost" placeholder="snapcast.local">
+              <label for="snapPort" id="lblSnapPort">Snapcast port</label>
+              <input id="snapPort" type="number" min="1" max="65535">
+              <label for="snapLatency" id="lblSnapLatency">Latency (ms)</label>
+              <input id="snapLatency" type="number" min="0" max="500">
+              <label for="snapUdp" id="lblSnapUdp">Prefer UDP</label>
+              <label class="switch compact">
+                <input type="checkbox" id="snapUdp">
+                <span></span>
+              </label>
+            </div>
+            <div class="form-hint" id="snapHint">UDP reduces latency but needs stable network.</div>
+          </article>
+        </div>
+
+        <div class="led-pane" id="config-wled-pane">
+          <article class="card">
+            <header class="card-header">
+              <div>
+                <h3 id="wledTitle">WLED layout</h3>
+                <p id="wledSubtitle" class="muted">Detected controllers and LED counts.</p>
+              </div>
+              <button id="btnWledRescan" class="ghost">Rescan</button>
+            </header>
+            <div class="table-wrapper">
+              <table class="wled-table">
+                <thead>
+                  <tr>
+                    <th id="wledTableName">Name</th>
+                    <th id="wledTableId">Identifier</th>
+                    <th id="wledTableLeds">LEDs</th>
+                    <th id="wledTableSegments">Segments</th>
+                    <th id="wledTableStatus">Status</th>
+                    <th id="wledTableLastSeen">Last seen</th>
+                  </tr>
+                </thead>
+                <tbody id="wledTableBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card form-card slim">
+            <header>
+              <h3 id="wledManualTitle">Add WLED manually</h3>
+              <p id="wledManualSubtitle" class="muted">Provide controller address when discovery fails.</p>
+            </header>
+            <div class="form-grid slim">
+              <label for="wledManualName" id="wledManualNameLabel">Name</label>
+              <input id="wledManualName" placeholder="Desk strip">
+              <label for="wledManualAddress" id="wledManualAddressLabel">Host / IP</label>
+              <input id="wledManualAddress" placeholder="192.168.0.42">
+              <label for="wledManualLeds" id="wledManualLedsLabel">LEDs</label>
+              <input id="wledManualLeds" type="number" min="1" max="4096">
+              <label for="wledManualSegments" id="wledManualSegmentsLabel">Segments</label>
+              <input id="wledManualSegments" type="number" min="1" max="64" value="1">
+            </div>
+            <div class="form-actions end">
+              <button type="button" class="primary" id="btnWledAdd">Add controller</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="network" class="view">
+        <header>
+          <h2 id="networkTitle">Network configuration</h2>
+          <p id="networkSubtitle" class="muted">Use DHCP or set manual parameters.</p>
+        </header>
+        <div class="card form-card">
+          <div class="form-row toggle">
+            <span id="dhcpLabel">Use DHCP</span>
+            <label class="switch">
+              <input type="checkbox" id="dhcp">
+              <span></span>
+            </label>
+          </div>
+          <div class="form-grid">
+            <label for="host" id="lblHost">Hostname</label><input id="host" placeholder="ledbrain">
+            <label for="ip" id="lblStaticIp">Static IP</label><input id="ip" placeholder="192.168.1.80">
+            <label for="mask" id="lblNetmask">Netmask</label><input id="mask" placeholder="255.255.255.0">
+            <label for="gw" id="lblGatewayForm">Gateway</label><input id="gw" placeholder="192.168.1.1">
+            <label for="dns" id="lblDnsForm">DNS</label><input id="dns" placeholder="8.8.8.8">
+          </div>
+          <div class="form-hint" id="networkHint">Saving without reboot keeps current link until manual restart.</div>
+          <div class="form-actions">
+            <button type="button" class="primary" id="btnSaveNetwork">Save & reboot</button>
+            <button type="button" class="ghost" id="btnNetworkApply">Save only</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="mqtt" class="view">
+        <header>
+          <h2 id="mqttTitle">MQTT configuration</h2>
+          <p id="mqttSubtitle" class="muted">Connect with Home Assistant or other brokers.</p>
+        </header>
+        <div class="card form-card">
+          <div class="form-row toggle">
+            <span id="mqttEnabledLabel">Enable MQTT</span>
+            <label class="switch">
+              <input type="checkbox" id="mqttEnabled">
+              <span></span>
+            </label>
+          </div>
+          <div class="form-grid">
+            <label for="mqttHost" id="lblMqttHost">Server</label><input id="mqttHost" placeholder="homeassistant.local">
+            <label for="mqttPort" id="lblMqttPort">Port</label><input id="mqttPort" type="number" min="1" max="65535" value="1883">
+            <label for="mqttUser" id="lblMqttUserField">Username</label><input id="mqttUser">
+            <label for="mqttPass" id="lblMqttPass">Password</label><input id="mqttPass" type="password">
+            <label for="ddpTarget" id="lblDdpTarget">DDP target</label><input id="ddpTarget" placeholder="wled-desk.local">
+            <label for="ddpPort" id="lblDdpPort">DDP port</label><input id="ddpPort" type="number" min="1" max="65535" value="4048">
+          </div>
+          <div class="form-hint" id="mqttHint">Broker credentials are optional. DDP target is your WLED instance.</div>
+          <div class="form-actions">
+            <button type="button" class="primary" id="btnSaveMqtt">Save & reboot</button>
+            <button type="button" class="ghost" id="btnMqttSync">Sync topics</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="system" class="view">
+        <header>
+          <h2 id="systemTitle">System</h2>
+          <p id="systemSubtitle" class="muted">General behaviour and maintenance tools.</p>
+        </header>
+        <div class="card form-card">
+          <div class="form-grid slim">
+            <label for="langMirror" id="lblLangSystem">Language</label>
+            <select id="langMirror">
+              <option value="pl">Polski</option>
+              <option value="en">English</option>
+            </select>
+            <label for="autostart" id="lblAutostart">Autostart effects</label>
+            <label class="switch">
+              <input type="checkbox" id="autostart">
+              <span></span>
+            </label>
+          </div>
+          <div class="form-hint" id="systemHint">Autostart wiring will be connected with runtime soon.</div>
+          <div class="form-actions">
+            <button type="button" class="primary" id="btnSaveSystem">Save</button>
+            <button type="button" class="danger" id="btnFactoryReset">Factory reset</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <datalist id="effectCatalog"></datalist>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+{
+  "schema_version": 4,
+  "lang": "pl",
+  "autostart": false,
+  "network": {
+    "hostname": "ledbrain",
+    "use_dhcp": true,
+    "static_ip": "",
+    "netmask": "",
+    "gateway": "",
+    "dns": ""
+  },
+  "mqtt": {
+    "configured": false,
+    "host": "",
+    "port": 1883,
+    "username": "",
+    "password": "",
+    "ddp_target": "192.168.1.100",
+    "ddp_port": 4048
+  },
+  "wled_devices": [],
+  "led_engine": {
+    "driver": "esp_rmt",
+    "max_fps": 120,
+    "global_current_limit_ma": 6000,
+    "power_supply_voltage": 5.0,
+    "power_supply_watts": 30.0,
+    "auto_power_limit": true,
+    "parallel_outputs": 4,
+    "dedicate_core": true,
+    "enable_dma": true,
+    "segments": [
+      {
+        "id": "segment-1",
+        "name": "Biurko",
+        "start_index": 0,
+        "led_count": 120,
+        "gpio": 4,
+        "rmt_channel": 0,
+        "chipset": "ws2812b",
+        "color_order": "GRB",
+        "enabled": true,
+        "reverse": false,
+        "mirror": false,
+        "matrix_enabled": false,
+        "matrix": {
+          "width": 0,
+          "height": 0,
+          "serpentine": true,
+          "vertical": false
+        },
+        "power_limit_ma": 3000,
+        "audio": {
+          "stereo_split": false,
+          "gain_left": 1.0,
+          "gain_right": 1.0,
+          "sensitivity": 0.85,
+          "threshold": 0.05,
+          "smoothing": 0.65,
+          "per_led_sensitivity": []
+        }
+      }
+    ],
+    "audio": {
+      "source": "snapcast",
+      "sample_rate": 48000,
+      "frame_ms": 20,
+      "fft_size": 1024,
+      "stereo": true,
+      "sensitivity": 1.0,
+      "snapcast": {
+        "enabled": true,
+        "host": "snapcast.local",
+        "port": 1704,
+        "latency_ms": 60,
+        "prefer_udp": true
+      }
+    },
+    "effects": {
+      "default_engine": "wled",
+      "assignments": [
+        {
+          "segment_id": "segment-1",
+          "engine": "wled",
+          "effect": "Solid",
+          "preset": "",
+          "audio_link": true,
+          "audio_profile": "default",
+          "brightness": 255,
+          "intensity": 128,
+          "speed": 128,
+          "audio_mode": "spectrum"
+        }
+      ]
+    }
+  }
+}

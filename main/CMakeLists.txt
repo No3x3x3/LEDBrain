@@ -1,0 +1,32 @@
+idf_component_register(
+  SRCS 
+      "main.cpp"
+      "eth_init.cpp"
+      "mdns_init.cpp"
+      "web_setup.cpp"
+      "config.cpp"
+      "mqtt_ha.cpp"
+      "ddp_tx.cpp"
+      "heartbeat.cpp"
+      "wled_discovery.cpp"
+  INCLUDE_DIRS "."
+  EMBED_FILES 
+      "spiffs/index.html"
+      "spiffs/app.js"
+      "spiffs/style.css"
+      "spiffs/lang_pl.json"
+      "spiffs/lang_en.json"
+      "spiffs/config.json"
+  REQUIRES 
+      esp_netif
+      esp_eth
+      nvs_flash
+      mqtt
+      esp_http_server
+      esp_http_client
+      json
+  PRIV_REQUIRES 
+      mdns
+      esp_driver_gpio
+      led_engine
+)

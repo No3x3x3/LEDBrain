@@ -1,0 +1,9 @@
+pytest-embedded-serial-esp
+pytest-embedded-idf
+junit_xml
+SimpleWebSocketServer
+dpkt
+pytest
+idf_build_apps
+netifaces
+esptool>=5.1.0
