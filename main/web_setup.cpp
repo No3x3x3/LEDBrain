@@ -10,6 +10,9 @@
 #include "led_engine.hpp"
 #include "led_engine/pinout.hpp"
 #include "led_engine/audio_pipeline.hpp"
+#include "esp_app_format.h"
+#include "esp_ota_ops.h"
+#include "ota.hpp"
 #include <string>
 #include <algorithm>
 #include <cctype>
@@ -166,9 +169,21 @@ static esp_err_t api_factory_reset(httpd_req_t* req) {
 static esp_err_t api_info(httpd_req_t* req){
   // proste info JSON
   cJSON* root = cJSON_CreateObject();
-  cJSON_AddStringToObject(root,"fw","LEDBrain MVP 0.1");
-  cJSON_AddStringToObject(root,"idf", IDF_VER);
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  esp_app_desc_t desc{};
+  if (esp_ota_get_partition_description(running, &desc) == ESP_OK) {
+    cJSON_AddStringToObject(root, "fw_name", desc.project_name);
+    cJSON_AddStringToObject(root, "fw_version", desc.version);
+    cJSON_AddStringToObject(root, "fw_build_date", desc.date);
+    cJSON_AddStringToObject(root, "fw_build_time", desc.time);
+  }
+  cJSON_AddStringToObject(root, "fw", "LEDBrain");
+  cJSON_AddStringToObject(root, "idf", IDF_VER);
   cJSON_AddStringToObject(root,"hostname", s_cfg->network.hostname.c_str());
+  cJSON_AddStringToObject(root, "ota_state", ota_state_string());
+  if (ota_last_error() != ESP_OK) {
+    cJSON_AddStringToObject(root, "ota_error", esp_err_to_name(ota_last_error()));
+  }
   // IP
   char ip[16]="0.0.0.0";
   esp_netif_ip_info_t info;
@@ -445,6 +460,29 @@ static esp_err_t api_led_state_post(httpd_req_t* req) {
   return ESP_OK;
 }
 
+static esp_err_t api_ota(httpd_req_t* req) {
+  std::string url = kDefaultOtaUrl;
+  auto body = read_body(req);
+  if (!body.empty()) {
+    cJSON* root = cJSON_ParseWithLength(body.c_str(), body.size());
+    if (root) {
+      if (cJSON* u = cJSON_GetObjectItem(root, "url"); cJSON_IsString(u) && u->valuestring) {
+        url = u->valuestring;
+      }
+      cJSON_Delete(root);
+    }
+  }
+  const esp_err_t st = ota_trigger_update(url.c_str());
+  if (st == ESP_ERR_INVALID_STATE) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA already in progress");
+  }
+  if (st != ESP_OK) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start OTA");
+  }
+  httpd_resp_sendstr(req, "OTA started");
+  return ESP_OK;
+}
+
 void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime){
   s_cfg = &cfg;
   s_led_runtime = runtime;
@@ -493,6 +531,8 @@ void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime){
   httpd_register_uri_handler(server, &u_led_state_get);
   httpd_uri_t u_led_state_post = { .uri="/api/led/state", .method=HTTP_POST, .handler=api_led_state_post, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_led_state_post);
+  httpd_uri_t u_ota = { .uri="/api/ota/update", .method=HTTP_POST, .handler=api_ota, .user_ctx=NULL };
+  httpd_register_uri_handler(server, &u_ota);
 
   ESP_LOGI(TAG,"Web server started");
 }

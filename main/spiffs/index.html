@@ -75,12 +75,13 @@
           <article class="card">
             <header>
               <h3 id="statusCardTitle">Runtime</h3>
-              <span class="badge" id="badgeStatus">—</span>
+              <span class="badge" id="badgeStatus">-</span>
             </header>
             <dl class="kv">
-              <div><dt id="lblDevice">Device name</dt><dd id="valDevice">—</dd></div>
-              <div><dt id="lblFirmware">Firmware</dt><dd id="valFirmware">—</dd></div>
-              <div><dt id="lblUptime">Uptime</dt><dd id="valUptime">—</dd></div>
+              <div><dt id="lblDevice">Device name</dt><dd id="valDevice">-</dd></div>
+              <div><dt id="lblFirmware">Firmware</dt><dd id="valFirmware">-</dd></div>
+              <div><dt id="lblOta">OTA</dt><dd id="valOta">-</dd></div>
+              <div><dt id="lblUptime">Uptime</dt><dd id="valUptime">-</dd></div>
             </dl>
           </article>
 
@@ -435,7 +436,9 @@
           <div class="form-actions">
             <button type="button" class="primary" id="btnSaveSystem">Save</button>
             <button type="button" class="danger" id="btnFactoryReset">Factory reset</button>
+            <button type="button" class="ghost" id="btnOta">Check update (OTA)</button>
           </div>
+          <div class="form-hint" id="otaHint">Pulls the latest firmware from GitHub releases.</div>
         </div>
       </section>
     </main>

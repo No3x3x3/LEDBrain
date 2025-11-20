@@ -9,6 +9,7 @@ idf_component_register(
       "ddp_tx.cpp"
       "heartbeat.cpp"
       "wled_discovery.cpp"
+      "ota.cpp"
   INCLUDE_DIRS "."
   EMBED_FILES 
       "spiffs/index.html"
@@ -24,6 +25,7 @@ idf_component_register(
       mqtt
       esp_http_server
       esp_http_client
+      esp_https_ota
       json
   PRIV_REQUIRES 
       mdns

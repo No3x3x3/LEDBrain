@@ -112,6 +112,7 @@ function renderLang() {
     mqttCardTitle: "overview_mqtt_card",
     lblDevice: "device_name",
     lblFirmware: "firmware",
+    lblOta: "ota",
     lblUptime: "uptime",
     lblIp: "ip",
     lblGateway: "gw",
@@ -151,6 +152,8 @@ function renderLang() {
     systemHint: "system_hint",
     btnSaveSystem: "save",
     btnFactoryReset: "factory_reset",
+    btnOta: "btn_ota",
+    otaHint: "ota_hint",
     ledTitle: "led_title",
     ledSubtitle: "led_subtitle",
     ledSegmentsTitle: "led_segments_title",
@@ -378,6 +381,15 @@ function formatUptime(seconds) {
     parts.push(`${secs}s`);
   }
   return parts.join(" ");
+}
+
+function formatOtaState(state, err) {
+  const key = state ? `ota_state_${state}` : "ota_state_unknown";
+  const text = t(key);
+  if (state === "failed" && err) {
+    return `${text} (${err})`;
+  }
+  return text;
 }
 
 function formatAge(ms) {
@@ -645,26 +657,30 @@ function updateOverview() {
   const info = state.info || {};
   const cfg = state.config || {};
 
-  const fw = info.fw ? `${info.fw} • ${info.idf}` : info.idf ?? "—";
+  const fwName = info.fw_name || info.fw || "LEDBrain";
+  const fwVersion = info.fw_version ? ` ${info.fw_version}` : "";
+  const fwIdf = info.idf ? ` · IDF ${info.idf}` : "";
+  const fw = `${fwName}${fwVersion}${fwIdf}`.trim();
   const device = cfg.network?.hostname || "ledbrain";
-  qs("chipIp").textContent = `IP: ${info.ip || "—"}`;
+  qs("chipIp").textContent = `IP: ${info.ip || "-"}`;
   qs("chipVersion").textContent = fw;
   qs("valDevice").textContent = device;
   qs("valFirmware").textContent = fw;
-  qs("valUptime").textContent = info.uptime_s ? formatUptime(info.uptime_s) : "—";
+  qs("valOta").textContent = formatOtaState(info.ota_state, info.ota_error);
+  qs("valUptime").textContent = info.uptime_s ? formatUptime(info.uptime_s) : "-";
 
-  qs("valIp").textContent = info.ip || "—";
-  qs("valGateway").textContent = cfg.network?.gateway || "—";
-  qs("valDns").textContent = cfg.network?.dns || "—";
+  qs("valIp").textContent = info.ip || "-";
+  qs("valGateway").textContent = cfg.network?.gateway || "-";
+  qs("valDns").textContent = cfg.network?.dns || "-";
   qs("valMqttServer").textContent =
     cfg.mqtt?.host && cfg.mqtt?.port
       ? `${cfg.mqtt.host}:${cfg.mqtt.port}`
-      : cfg.mqtt?.host || "—";
+      : cfg.mqtt?.host || "-";
   qs("valMqttUser").textContent = cfg.mqtt?.username || t("not_set");
   qs("valDdp").textContent =
     cfg.mqtt?.ddp_target && cfg.mqtt?.ddp_port
       ? `${cfg.mqtt.ddp_target}:${cfg.mqtt.ddp_port}`
-      : cfg.mqtt?.ddp_target || "—";
+      : cfg.mqtt?.ddp_target || "-";
 
   const ledEnabled = info?.led_engine?.enabled ?? !!state.ledState.enabled;
   setBadge("badgeStatus", ledEnabled ? t("badge_running") : t("badge_stopped"), ledEnabled ? "ok" : "warn");
@@ -679,7 +695,6 @@ function updateOverview() {
     setBadge("badgeMqtt", t("badge_disabled"), "warn");
   }
 }
-
 function updateDhcpUi() {
   const disabled = qs("dhcp").checked;
   ["ip", "mask", "gw", "dns"].forEach((id) => {
@@ -1672,6 +1687,21 @@ async function factoryReset() {
   }
 }
 
+async function triggerOta() {
+  try {
+    notify(t("toast_ota_start"), "ok");
+    const res = await fetch("/api/ota/update", { method: "POST" });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    notify(t("toast_ota_running"), "ok");
+    setTimeout(() => refreshInfo(), 1500);
+  } catch (err) {
+    console.error(err);
+    notify(t("toast_ota_failed"), "error");
+  }
+}
+
 function bindLedTabs() {
   const buttons = document.querySelectorAll("#ledSubnav button");
   const panes = document.querySelectorAll(".led-pane");
@@ -1747,6 +1777,10 @@ function initEvents() {
 
   qs("btnSaveSystem").addEventListener("click", saveSystem);
   qs("btnFactoryReset").addEventListener("click", factoryReset);
+  const btnOta = qs("btnOta");
+  if (btnOta) {
+    btnOta.addEventListener("click", triggerOta);
+  }
   const btnRescan = qs("btnWledRescan");
   if (btnRescan) {
     btnRescan.addEventListener("click", rescanWled);

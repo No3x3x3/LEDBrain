@@ -1,0 +1,55 @@
+name: Build release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  IDF_TARGET: esp32p4
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up ESP-IDF
+        uses: espressif/github-actions/setup-esp-idf@v1
+        with:
+          version: v5.3
+          tools-cache: ${{ runner.temp }}/esp-idf-tools
+
+      - name: Build firmware
+        run: idf.py build
+
+      - name: Package artifacts
+        run: |
+          mkdir -p out
+          cp build/ledbrain.bin out/
+          cp build/bootloader/bootloader.bin out/
+          cp build/partition_table/partition-table.bin out/
+          cp build/flasher_args.json out/
+          ls -lh out
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            out/ledbrain.bin
+            out/bootloader.bin
+            out/partition-table.bin
+            out/flasher_args.json
