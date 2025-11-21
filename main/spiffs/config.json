@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "lang": "pl",
   "autostart": false,
   "network": {
@@ -24,6 +24,7 @@
     "driver": "esp_rmt",
     "max_fps": 120,
     "global_current_limit_ma": 6000,
+    "global_brightness": 255,
     "power_supply_voltage": 5.0,
     "power_supply_watts": 30.0,
     "auto_power_limit": true,

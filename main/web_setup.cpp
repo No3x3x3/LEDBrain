@@ -207,6 +207,7 @@ static esp_err_t api_info(httpd_req_t* req){
       cJSON_AddNumberToObject(led, "target_fps", st.target_fps);
       cJSON_AddNumberToObject(led, "segments", static_cast<double>(st.segment_count));
       cJSON_AddNumberToObject(led, "current_ma", st.global_current_ma);
+      cJSON_AddNumberToObject(led, "brightness", st.global_brightness);
       AudioDiagnostics diag = led_audio_get_diagnostics();
       cJSON* audio = cJSON_AddObjectToObject(led, "audio");
       if (audio) {
@@ -416,8 +417,13 @@ static esp_err_t api_led_state_get(httpd_req_t* req) {
     return httpd_resp_send_500(req);
   }
   const bool enabled = s_led_runtime ? s_led_runtime->enabled() : (s_cfg ? s_cfg->autostart : false);
+  uint8_t brightness = s_cfg ? s_cfg->led_engine.global_brightness : 255;
+  if (s_led_runtime) {
+    brightness = s_led_runtime->brightness();
+  }
   cJSON_AddBoolToObject(root, "enabled", enabled);
   cJSON_AddBoolToObject(root, "autostart", s_cfg ? s_cfg->autostart : false);
+  cJSON_AddNumberToObject(root, "brightness", brightness);
   char* txt = cJSON_PrintUnformatted(root);
   if (!txt) {
     cJSON_Delete(root);
@@ -436,24 +442,43 @@ static esp_err_t api_led_state_post(httpd_req_t* req) {
   if (!root) {
     return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json");
   }
-  cJSON* enabled = cJSON_GetObjectItem(root, "enabled");
-  if (!cJSON_IsBool(enabled)) {
-    cJSON_Delete(root);
-    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "enabled missing");
+  bool value = s_led_runtime ? s_led_runtime->enabled() : (s_cfg ? s_cfg->autostart : false);
+  bool has_enabled = false;
+  if (cJSON* enabled = cJSON_GetObjectItem(root, "enabled"); cJSON_IsBool(enabled)) {
+    value = cJSON_IsTrue(enabled);
+    has_enabled = true;
   }
-  const bool value = cJSON_IsTrue(enabled);
+  bool has_brightness = false;
+  uint8_t brightness = s_cfg ? s_cfg->led_engine.global_brightness : 255;
+  if (cJSON* bri = cJSON_GetObjectItem(root, "brightness"); cJSON_IsNumber(bri)) {
+    const int val = static_cast<int>(bri->valuedouble);
+    brightness = static_cast<uint8_t>(std::clamp(val, 0, 255));
+    has_brightness = true;
+  }
   if (s_led_runtime) {
-    s_led_runtime->set_enabled(value);
+    if (has_enabled) {
+      s_led_runtime->set_enabled(value);
+    }
+    if (has_brightness) {
+      s_led_runtime->set_brightness(brightness);
+    }
   }
   bool remember = false;
   if (cJSON* rem = cJSON_GetObjectItem(root, "remember"); cJSON_IsBool(rem)) {
     remember = cJSON_IsTrue(rem);
   }
   cJSON_Delete(root);
-  if (remember && s_cfg) {
-    s_cfg->autostart = value;
-    if (config_save(*s_cfg) != ESP_OK) {
-      return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to store autostart");
+  if (s_cfg) {
+    if (has_brightness) {
+      s_cfg->led_engine.global_brightness = brightness;
+    }
+    if (remember) {
+      s_cfg->autostart = has_enabled ? value : s_cfg->autostart;
+    }
+    if (remember || has_brightness) {
+      if (config_save(*s_cfg) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to store led state");
+      }
     }
   }
   httpd_resp_sendstr(req, "OK");

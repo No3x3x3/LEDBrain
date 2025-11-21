@@ -25,6 +25,8 @@ static const char* TAG = "led-engine";
 esp_err_t LedEngineRuntime::init(const LedHardwareConfig& cfg) {
   std::lock_guard<std::mutex> lock(mutex_);
   cfg_ = cfg;
+  brightness_ = std::clamp<int>(cfg_.global_brightness, 0, 255);
+  cfg_.global_brightness = brightness_;
   enabled_ = true;
   ESP_ERROR_CHECK_WITHOUT_ABORT(led_audio_apply_config(cfg.audio));
   const esp_err_t err = configure_driver(cfg_);
@@ -35,6 +37,8 @@ esp_err_t LedEngineRuntime::init(const LedHardwareConfig& cfg) {
 esp_err_t LedEngineRuntime::update_config(const LedHardwareConfig& cfg) {
   std::lock_guard<std::mutex> lock(mutex_);
   cfg_ = cfg;
+  brightness_ = std::clamp<int>(cfg_.global_brightness, 0, 255);
+  cfg_.global_brightness = brightness_;
   ESP_ERROR_CHECK_WITHOUT_ABORT(led_audio_apply_config(cfg.audio));
   const esp_err_t err = configure_driver(cfg_);
   initialized_ = (err == ESP_OK);
@@ -48,6 +52,7 @@ LedEngineStatus LedEngineRuntime::status() const {
   st.target_fps = cfg_.max_fps;
   st.segment_count = cfg_.segments.size();
   st.global_current_ma = cfg_.global_current_limit_ma;
+  st.global_brightness = brightness_;
   st.enabled = enabled_;
   return st;
 }
@@ -82,6 +87,19 @@ esp_err_t LedEngineRuntime::set_enabled(bool enabled) {
 bool LedEngineRuntime::enabled() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return enabled_;
+}
+
+esp_err_t LedEngineRuntime::set_brightness(uint8_t brightness) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  brightness_ = std::clamp<int>(brightness, 0, 255);
+  cfg_.global_brightness = brightness_;
+  // TODO: push brightness to rendering backend when available
+  return ESP_OK;
+}
+
+uint8_t LedEngineRuntime::brightness() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return brightness_;
 }
 
 void LedEngineRuntime::log_segment(const LedSegmentConfig& seg) const {

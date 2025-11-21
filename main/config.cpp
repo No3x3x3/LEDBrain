@@ -10,7 +10,7 @@
 static constexpr const char* TAG = "config";
 static constexpr const char* NVS_NAMESPACE = "appcfg";
 static constexpr const char* KEY_BLOB = "config";
-static constexpr uint32_t CURRENT_SCHEMA = 5;
+static constexpr uint32_t CURRENT_SCHEMA = 6;
 
 extern const uint8_t _binary_config_json_start[] asm("_binary_config_json_start");
 extern const uint8_t _binary_config_json_end[] asm("_binary_config_json_end");
@@ -317,6 +317,10 @@ void decode_led_segments(LedHardwareConfig& hw, cJSON* obj) {
   if (cJSON* limit = cJSON_GetObjectItem(obj, "global_current_limit_ma"); cJSON_IsNumber(limit)) {
     hw.global_current_limit_ma = static_cast<uint32_t>(std::max(0, static_cast<int>(limit->valuedouble)));
   }
+  if (cJSON* bri = cJSON_GetObjectItem(obj, "global_brightness"); cJSON_IsNumber(bri)) {
+    const int val = static_cast<int>(bri->valuedouble);
+    hw.global_brightness = static_cast<uint8_t>(std::clamp(val, 0, 255));
+  }
   if (cJSON* voltage = cJSON_GetObjectItem(obj, "power_supply_voltage"); cJSON_IsNumber(voltage)) {
     hw.power_supply_voltage = static_cast<float>(voltage->valuedouble);
   }
@@ -410,6 +414,7 @@ void encode_led_segments(const LedHardwareConfig& hw, cJSON* obj) {
   cJSON_AddStringToObject(obj, "driver", driver.c_str());
   cJSON_AddNumberToObject(obj, "max_fps", hw.max_fps);
   cJSON_AddNumberToObject(obj, "global_current_limit_ma", hw.global_current_limit_ma);
+  cJSON_AddNumberToObject(obj, "global_brightness", hw.global_brightness);
   cJSON_AddNumberToObject(obj, "power_supply_voltage", hw.power_supply_voltage);
   cJSON_AddNumberToObject(obj, "power_supply_watts", hw.power_supply_watts);
   cJSON_AddBoolToObject(obj, "auto_power_limit", hw.auto_power_limit);

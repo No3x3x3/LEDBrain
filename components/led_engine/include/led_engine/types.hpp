@@ -118,6 +118,7 @@ struct LedHardwareConfig {
   LedDriverType driver{LedDriverType::EspRmt};
   uint16_t max_fps{120};
   uint32_t global_current_limit_ma{6000};
+  uint8_t global_brightness{255};
   float power_supply_voltage{5.0f};
   float power_supply_watts{0.0f};
   bool auto_power_limit{false};

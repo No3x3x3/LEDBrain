@@ -10,6 +10,7 @@ struct LedEngineStatus {
   uint16_t target_fps{0};
   size_t segment_count{0};
   uint32_t global_current_ma{0};
+  uint8_t global_brightness{255};
   bool enabled{true};
 };
 
@@ -19,6 +20,8 @@ public:
   esp_err_t update_config(const LedHardwareConfig& cfg);
   LedEngineStatus status() const;
   esp_err_t set_enabled(bool enabled);
+  esp_err_t set_brightness(uint8_t brightness);
+  uint8_t brightness() const;
   bool enabled() const;
 
 private:
@@ -28,5 +31,6 @@ private:
   LedHardwareConfig cfg_{};
   bool initialized_{false};
   bool enabled_{true};
+  uint8_t brightness_{255};
   mutable std::mutex mutex_;
 };
