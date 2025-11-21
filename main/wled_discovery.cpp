@@ -234,6 +234,10 @@ WledDeviceStatus make_status_from_result(const mdns_result_t& result) {
     if (info.segments > 0) status.config.segments = info.segments;
     status.http_verified = info.looks_like_wled;
   }
+  // Ensure ID is stable across different service entries for the same host/IP
+  if (!status.config.id.empty() && status.config.address == status.config.id && !info.version.empty()) {
+    status.config.id = status.config.address;
+  }
 
   return status;
 }
@@ -283,8 +287,16 @@ bool upsert_config_locked(const WledDeviceStatus& status) {
   if (!s_cfg) {
     return false;
   }
-  auto it = std::find_if(s_cfg->wled_devices.begin(), s_cfg->wled_devices.end(),
-                         [&](const WledDeviceConfig& cfg) { return cfg.id == status.config.id; });
+  auto same_device = [&](const WledDeviceConfig& cfg) {
+    if (!status.config.id.empty() && cfg.id == status.config.id) {
+      return true;
+    }
+    if (!status.config.address.empty() && !cfg.address.empty() && cfg.address == status.config.address) {
+      return true;
+    }
+    return false;
+  };
+  auto it = std::find_if(s_cfg->wled_devices.begin(), s_cfg->wled_devices.end(), same_device);
   if (it == s_cfg->wled_devices.end()) {
     s_cfg->wled_devices.push_back(status.config);
     return true;
@@ -313,8 +325,20 @@ bool upsert_config_locked(const WledDeviceStatus& status) {
 void merge_status_locked(const std::vector<WledDeviceStatus>& discovered, bool& config_changed) {
   config_changed = false;
   for (const auto& device : discovered) {
-    auto it = std::find_if(s_status.begin(), s_status.end(),
-                           [&](const WledDeviceStatus& st) { return st.config.id == device.config.id; });
+    auto matches = [&](const WledDeviceStatus& st) {
+      if (!device.config.id.empty() && st.config.id == device.config.id) {
+        return true;
+      }
+      if (!device.ip.empty() && !st.ip.empty() && st.ip == device.ip) {
+        return true;
+      }
+      if (!device.config.address.empty() && !st.config.address.empty() &&
+          st.config.address == device.config.address) {
+        return true;
+      }
+      return false;
+    };
+    auto it = std::find_if(s_status.begin(), s_status.end(), matches);
     if (it == s_status.end()) {
       s_status.push_back(device);
     } else {
@@ -324,6 +348,29 @@ void merge_status_locked(const std::vector<WledDeviceStatus>& discovered, bool& 
     config_changed = config_changed || changed;
   }
   refresh_online_state_locked();
+
+  // Drop duplicates on same address/id/ip, keep the newest entries
+  std::vector<WledDeviceStatus> deduped;
+  std::vector<std::string> seen;
+  auto key_of = [](const WledDeviceStatus& st) -> std::string {
+    if (!st.config.address.empty()) return st.config.address;
+    if (!st.ip.empty()) return st.ip;
+    return st.config.id;
+  };
+  for (auto it = s_status.rbegin(); it != s_status.rend(); ++it) {
+    auto key = key_of(*it);
+    if (key.empty()) {
+      deduped.push_back(*it);
+      continue;
+    }
+    if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
+      continue;
+    }
+    seen.push_back(key);
+    deduped.push_back(*it);
+  }
+  std::reverse(deduped.begin(), deduped.end());
+  s_status.swap(deduped);
 }
 
 void wled_scan_once() {

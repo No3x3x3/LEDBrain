@@ -20,6 +20,61 @@ namespace {
 void decode_led_engine(AppConfig& cfg, cJSON* root);
 void encode_led_engine(const AppConfig& cfg, cJSON* root);
 
+void prune_legacy_defaults(AppConfig& cfg) {
+  // Drop the old default "Biurko"/"Desk" segment that was bundled in config.json
+  if (cfg.led_engine.segments.size() == 1) {
+    const auto& seg = cfg.led_engine.segments.front();
+    if ((seg.id == "segment-1") &&
+        (seg.name == "Biurko" || seg.name == "Desk" || seg.name.empty()) &&
+        seg.start_index == 0) {
+      cfg.led_engine.segments.clear();
+      cfg.led_engine.effects.assignments.clear();
+    }
+  }
+}
+
+void prune_effect_assignments(AppConfig& cfg) {
+  if (cfg.led_engine.effects.assignments.empty()) {
+    return;
+  }
+  std::vector<std::string> valid;
+  valid.reserve(cfg.led_engine.segments.size());
+  for (const auto& seg : cfg.led_engine.segments) {
+    if (!seg.id.empty()) valid.push_back(seg.id);
+  }
+  auto& assigns = cfg.led_engine.effects.assignments;
+  assigns.erase(std::remove_if(assigns.begin(), assigns.end(), [&](const EffectAssignment& asg) {
+                  return std::find(valid.begin(), valid.end(), asg.segment_id) == valid.end();
+                }),
+                assigns.end());
+}
+
+void dedupe_wled_config(AppConfig& cfg) {
+  if (cfg.wled_devices.empty()) {
+    return;
+  }
+  std::vector<WledDeviceConfig> deduped;
+  auto key_of = [](const WledDeviceConfig& dev) {
+    if (!dev.address.empty()) return dev.address;
+    return dev.id;
+  };
+  for (const auto& dev : cfg.wled_devices) {
+    const auto key = key_of(dev);
+    bool exists = false;
+    for (const auto& kept : deduped) {
+      const auto kept_key = key_of(kept);
+      if (!key.empty() && !kept_key.empty() && key == kept_key) {
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) {
+      deduped.push_back(dev);
+    }
+  }
+  cfg.wled_devices.swap(deduped);
+}
+
 void decode_wled_devices(AppConfig& cfg, cJSON* root) {
   cfg.wled_devices.clear();
   if (!root) {
@@ -135,6 +190,10 @@ bool decode_json(AppConfig& cfg, const char* json, size_t len) {
   if (cJSON* schema = cJSON_GetObjectItem(root, "schema_version"); cJSON_IsNumber(schema)) {
     cfg.schema_version = static_cast<uint32_t>(schema->valuedouble);
   }
+
+  prune_legacy_defaults(cfg);
+  prune_effect_assignments(cfg);
+  dedupe_wled_config(cfg);
 
   cJSON_Delete(root);
   return true;
