@@ -57,6 +57,7 @@ body {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .chip {
@@ -78,6 +79,11 @@ body {
   border: 1px solid rgba(255, 122, 184, 0.35);
   font-size: 0.8rem;
   color: var(--text);
+}
+
+.pill.ghost {
+  background: rgba(177, 135, 255, 0.16);
+  border-color: rgba(177, 135, 255, 0.45);
 }
 
 .layout {
@@ -699,6 +705,54 @@ button.icon-only span {
   font-size: 1.1rem;
 }
 
+button.icon-refresh {
+  border-radius: 14px;
+  background: radial-gradient(circle at 30% 30%, rgba(255, 122, 184, 0.24), transparent 60%),
+    rgba(177, 135, 255, 0.18);
+  border-color: rgba(255, 168, 220, 0.55);
+}
+
+button.icon-refresh svg {
+  width: 18px;
+  height: 18px;
+  stroke: var(--text);
+  stroke-width: 2.2;
+  fill: none;
+  transform: rotate(-8deg);
+  transition: transform 0.2s ease, stroke 0.2s ease;
+}
+
+button.icon-refresh:hover svg {
+  transform: rotate(22deg);
+  stroke: #fff8fb;
+}
+
+.top-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 12px;
+  background: rgba(255, 122, 184, 0.12);
+  border: 1px solid rgba(255, 140, 210, 0.25);
+  min-width: 180px;
+}
+
+.slider-shell {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+#brightnessGlobal {
+  accent-color: var(--accent);
+  flex: 1;
+}
+
+#brightnessValue {
+  font-size: 0.9rem;
+}
+
 .form-actions {
   display: flex;
   flex-wrap: wrap;
@@ -716,6 +770,18 @@ button.icon-only span {
   gap: 1rem;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid rgba(88, 120, 180, 0.2);
+}
+
+.inline-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
 }
 
 .switch {

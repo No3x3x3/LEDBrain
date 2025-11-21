@@ -10,14 +10,25 @@
   <header class="topbar">
     <div class="brand">
       <h1>LEDBrain</h1>
-      <span id="chipVersion" class="muted">Firmware</span>
     </div>
     <div class="top-actions">
-      <div class="chip" id="chipIp">IP: --</div>
       <button id="btnPlayback" class="primary subtle" data-state="stopped" disabled>Start output</button>
-      <button id="btnRefresh" class="ghost icon-only" aria-label="Refresh" title="Refresh">
-        <span aria-hidden="true">↻</span>
+      <label class="top-slider" for="brightnessGlobal">
+        <span id="lblGlobalBrightness" class="muted">Brightness</span>
+        <div class="slider-shell">
+          <input id="brightnessGlobal" type="range" min="1" max="255" value="255">
+          <span id="brightnessValue">100%</span>
+        </div>
+      </label>
+      <button id="btnRefresh" class="ghost icon-only icon-refresh" aria-label="Refresh" title="Refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M21 5v6h-6" />
+          <path d="M3 19v-6h6" />
+          <path d="M5 10a7 7 0 0 1 11.66-3.79L21 9" />
+          <path d="M19 14a7 7 0 0 1-11.66 3.8L3 15" />
+        </svg>
       </button>
+      <div class="chip" id="chipIp">IP: --</div>
       <button id="btnReboot" class="danger">Reboot</button>
     </div>
   </header>
@@ -484,26 +495,45 @@
           <h2 id="networkTitle">Network configuration</h2>
           <p id="networkSubtitle" class="muted">Use DHCP or set manual parameters.</p>
         </header>
-        <div class="card form-card">
-          <div class="form-row toggle">
-            <span id="dhcpLabel">Use DHCP</span>
-            <label class="switch">
-              <input type="checkbox" id="dhcp">
-              <span></span>
-            </label>
-          </div>
-          <div class="form-grid">
-            <label for="host" id="lblHost">Hostname</label><input id="host" placeholder="ledbrain">
-            <label for="ip" id="lblStaticIp">Static IP</label><input id="ip" placeholder="192.168.1.80">
-            <label for="mask" id="lblNetmask">Netmask</label><input id="mask" placeholder="255.255.255.0">
-            <label for="gw" id="lblGatewayForm">Gateway</label><input id="gw" placeholder="192.168.1.1">
-            <label for="dns" id="lblDnsForm">DNS</label><input id="dns" placeholder="8.8.8.8">
-          </div>
-          <div class="form-hint" id="networkHint">Saving without reboot keeps current link until manual restart.</div>
-          <div class="form-actions">
-            <button type="button" class="primary" id="btnSaveNetwork">Save & reboot</button>
-            <button type="button" class="ghost" id="btnNetworkApply">Save only</button>
-          </div>
+        <div class="panel-grid">
+          <article class="card form-card">
+            <header class="card-header">
+              <div>
+                <h3 id="networkAddressingTitle">Addressing</h3>
+                <p class="muted" id="networkAddressingSubtitle">DHCP or static parameters used after reboot.</p>
+              </div>
+              <div class="inline-switch">
+                <span id="dhcpLabel">Network mode</span>
+                <label class="switch">
+                  <input type="checkbox" id="dhcp">
+                  <span></span>
+                </label>
+              </div>
+            </header>
+            <div class="form-grid">
+              <label for="ip" id="lblStaticIp">Static IP</label><input id="ip" placeholder="192.168.1.80">
+              <label for="mask" id="lblNetmask">Netmask</label><input id="mask" placeholder="255.255.255.0">
+              <label for="gw" id="lblGatewayForm">Gateway</label><input id="gw" placeholder="192.168.1.1">
+              <label for="dns" id="lblDnsForm">DNS</label><input id="dns" placeholder="8.8.8.8">
+            </div>
+            <div class="form-hint" id="networkHint">Saving without reboot keeps current link until manual restart.</div>
+          </article>
+
+          <article class="card form-card slim">
+            <header class="card-header">
+              <div>
+                <h3 id="networkIdentityTitle">Identity & apply</h3>
+                <p class="muted" id="networkIdentitySubtitle">Hostname and when to write settings.</p>
+              </div>
+            </header>
+            <div class="form-grid slim">
+              <label for="host" id="lblHost">Hostname</label><input id="host" placeholder="ledbrain">
+            </div>
+            <div class="form-actions">
+              <button type="button" class="primary" id="btnSaveNetwork">Save & reboot</button>
+              <button type="button" class="ghost" id="btnNetworkApply">Save only</button>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -512,27 +542,47 @@
           <h2 id="mqttTitle">MQTT configuration</h2>
           <p id="mqttSubtitle" class="muted">Connect with Home Assistant or other brokers.</p>
         </header>
-        <div class="card form-card">
-          <div class="form-row toggle">
-            <span id="mqttEnabledLabel">Enable MQTT</span>
-            <label class="switch">
-              <input type="checkbox" id="mqttEnabled">
-              <span></span>
-            </label>
-          </div>
-          <div class="form-grid">
-            <label for="mqttHost" id="lblMqttHost">Server</label><input id="mqttHost" placeholder="homeassistant.local">
-            <label for="mqttPort" id="lblMqttPort">Port</label><input id="mqttPort" type="number" min="1" max="65535" value="1883">
-            <label for="mqttUser" id="lblMqttUserField">Username</label><input id="mqttUser">
-            <label for="mqttPass" id="lblMqttPass">Password</label><input id="mqttPass" type="password">
-            <label for="ddpTarget" id="lblDdpTarget">DDP target</label><input id="ddpTarget" placeholder="wled-desk.local">
-            <label for="ddpPort" id="lblDdpPort">DDP port</label><input id="ddpPort" type="number" min="1" max="65535" value="4048">
-          </div>
-          <div class="form-hint" id="mqttHint">Broker credentials are optional. DDP target is your WLED instance.</div>
-          <div class="form-actions">
-            <button type="button" class="primary" id="btnSaveMqtt">Save & reboot</button>
-            <button type="button" class="ghost" id="btnMqttSync">Sync topics</button>
-          </div>
+        <div class="panel-grid">
+          <article class="card form-card">
+            <header class="card-header">
+              <div>
+                <h3 id="mqttBrokerTitle">Broker</h3>
+                <p class="muted" id="mqttBrokerSubtitle">Enable the bridge and point it at your broker.</p>
+              </div>
+              <div class="inline-switch">
+                <span id="mqttEnabledLabel">Enable MQTT</span>
+                <label class="switch">
+                  <input type="checkbox" id="mqttEnabled">
+                  <span></span>
+                </label>
+              </div>
+            </header>
+            <div class="form-grid">
+              <label for="mqttHost" id="lblMqttHost">Server</label><input id="mqttHost" placeholder="homeassistant.local">
+              <label for="mqttPort" id="lblMqttPort">Port</label><input id="mqttPort" type="number" min="1" max="65535" value="1883">
+              <label for="mqttUser" id="lblMqttUserField">Username</label><input id="mqttUser">
+              <label for="mqttPass" id="lblMqttPass">Password</label><input id="mqttPass" type="password">
+            </div>
+            <div class="form-hint" id="mqttHint">Broker credentials are optional. DDP target is your WLED instance.</div>
+          </article>
+
+          <article class="card form-card slim">
+            <header class="card-header">
+              <div>
+                <h3 id="mqttDdpTitle">DDP target</h3>
+                <p class="muted" id="mqttDdpSubtitle">Where to send site-to-site effects.</p>
+              </div>
+            </header>
+            <div class="form-grid slim">
+              <label for="ddpTarget" id="lblDdpTarget">DDP target</label><input id="ddpTarget" placeholder="wled-desk.local">
+              <label for="ddpPort" id="lblDdpPort">DDP port</label><input id="ddpPort" type="number" min="1" max="65535" value="4048">
+            </div>
+            <div class="form-actions">
+              <button type="button" class="primary" id="btnSaveMqtt">Save & reboot</button>
+              <button type="button" class="ghost" id="btnMqttSync">Sync topics</button>
+              <button type="button" class="ghost" id="btnMqttTest">Test connection</button>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -541,6 +591,37 @@
           <h2 id="systemTitle">System</h2>
           <p id="systemSubtitle" class="muted">General behaviour and maintenance tools.</p>
         </header>
+        <article class="card">
+          <header>
+            <h3 id="systemInfoTitle">System info</h3>
+            <p class="muted" id="systemInfoSubtitle">Current firmware and platform details.</p>
+          </header>
+          <dl class="kv">
+            <div><dt id="lblSystemFw">Firmware</dt><dd id="valSystemFw">-</dd></div>
+            <div><dt id="lblSystemIdf">ESP-IDF</dt><dd id="valSystemIdf">-</dd></div>
+            <div><dt id="lblSystemBuild">Build time</dt><dd id="valSystemBuild">-</dd></div>
+          </dl>
+        </article>
+
+        <article class="card form-card slim">
+          <header>
+            <h3 id="otaTitle">OTA updates</h3>
+            <p class="muted" id="otaSubtitle">Check and install releases after confirmation.</p>
+          </header>
+          <div class="form-grid slim">
+            <label id="lblCurrentVersion">Current version</label>
+            <div class="pill" id="valCurrentVersion">-</div>
+            <label id="lblAvailableVersion">Latest available</label>
+            <div class="pill ghost" id="valAvailableVersion">-</div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="ghost" id="btnOtaCheck">Check for updates</button>
+            <button type="button" class="primary" id="btnOtaApply" disabled>Install update</button>
+          </div>
+          <div class="form-hint" id="otaHint">Pulls the latest firmware from GitHub releases.</div>
+          <div class="form-hint" id="otaStatus">OTA idle</div>
+        </article>
+
         <div class="card form-card">
           <div class="form-grid slim">
             <label for="langMirror" id="lblLangSystem">Language</label>
@@ -558,9 +639,7 @@
           <div class="form-actions">
             <button type="button" class="primary" id="btnSaveSystem">Save</button>
             <button type="button" class="danger" id="btnFactoryReset">Factory reset</button>
-            <button type="button" class="ghost" id="btnOta">Check update (OTA)</button>
           </div>
-          <div class="form-hint" id="otaHint">Pulls the latest firmware from GitHub releases.</div>
         </div>
       </section>
     </main>

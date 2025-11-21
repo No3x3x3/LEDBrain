@@ -9,6 +9,10 @@ const state = {
   timers: { info: null, wled: null, uptime: null },
   lastInfoRefresh: 0,
   selectedFxSegment: null,
+  latestRelease: null,
+  otaChecking: false,
+  globalBrightness: 255,
+  brightnessTimer: null,
 };
 
 const T = {};
@@ -45,8 +49,16 @@ const AUDIO_PROFILES = [
   { value: "ledfx_energy", label: "audio_profile_ledfx_energy" },
   { value: "ledfx_tempo", label: "audio_profile_ledfx_tempo" },
 ];
+const OTA_RELEASE_URL = "https://api.github.com/repos/No3x3x3/LEDBrain/releases/latest";
+const MAX_BRIGHTNESS = 255;
 
 const qs = (id) => document.getElementById(id);
+const setText = (id, value) => {
+  const el = qs(id);
+  if (el) {
+    el.textContent = value ?? "";
+  }
+};
 
 function t(key) {
   return T[key] || key;
@@ -92,8 +104,8 @@ function renderLang() {
     tabConfigAudio: "config_tab_audio",
     tabConfigVirtual: "config_tab_virtual",
     tabConfigWled: "config_tab_wled",
-    btnRefresh: "btn_refresh",
     btnReboot: "btn_reboot",
+    lblGlobalBrightness: "global_brightness",
     ledDriverTitle: "led_driver_title",
     ledDriverSubtitle: "led_driver_subtitle",
     lblDriver: "led_driver_label",
@@ -125,6 +137,10 @@ function renderLang() {
     btnMqttTest: "btn_mqtt_test",
     networkTitle: "network_title",
     networkSubtitle: "network_subtitle",
+    networkAddressingTitle: "network_addressing_title",
+    networkAddressingSubtitle: "network_addressing_subtitle",
+    networkIdentityTitle: "network_identity_title",
+    networkIdentitySubtitle: "network_identity_subtitle",
     dhcpLabel: "dhcp",
     lblHost: "hostname",
     lblStaticIp: "ip",
@@ -136,6 +152,10 @@ function renderLang() {
     btnNetworkApply: "save_apply",
     mqttTitle: "mqtt_title",
     mqttSubtitle: "mqtt_subtitle",
+    mqttBrokerTitle: "mqtt_broker_title",
+    mqttBrokerSubtitle: "mqtt_broker_subtitle",
+    mqttDdpTitle: "mqtt_ddp_title",
+    mqttDdpSubtitle: "mqtt_ddp_subtitle",
     mqttEnabledLabel: "mqtt_enabled",
     lblMqttHost: "mqtt_host",
     lblMqttPort: "mqtt_port",
@@ -148,12 +168,22 @@ function renderLang() {
     btnMqttSync: "btn_mqtt_sync",
     systemTitle: "system_title",
     systemSubtitle: "system_subtitle",
+    systemInfoTitle: "system_info_title",
+    systemInfoSubtitle: "system_info_subtitle",
+    lblSystemFw: "firmware",
+    lblSystemIdf: "idf_version",
+    lblSystemBuild: "build_time",
+    otaTitle: "ota_title",
+    otaSubtitle: "ota_subtitle",
+    lblCurrentVersion: "current_version",
+    lblAvailableVersion: "available_version",
+    btnOtaCheck: "btn_ota_check",
+    btnOtaApply: "btn_ota_apply",
     lblLangSystem: "language",
     lblAutostart: "autostart",
     systemHint: "system_hint",
     btnSaveSystem: "save",
     btnFactoryReset: "factory_reset",
-    btnOta: "btn_ota",
     otaHint: "ota_hint",
     ledTitle: "led_title",
     ledSubtitle: "led_subtitle",
@@ -269,7 +299,11 @@ function renderLang() {
       el.textContent = t(key);
     }
   });
+  setOtaStatus(t("ota_status_idle"));
+  setText("valAvailableVersion", state.latestRelease?.tag || "-");
+  setText("valCurrentVersion", state.info?.fw_version || state.info?.fw_name || "-");
   updatePowerSummary();
+  updateDhcpUi();
 
   const placeholders = [
     ["host", "ph_host"],
@@ -360,9 +394,41 @@ async function loadLedState() {
   try {
     const res = await fetch("/api/led/state");
     state.ledState = await res.json();
+    if (typeof state.ledState.brightness === "number") {
+      state.globalBrightness = clamp(state.ledState.brightness, 1, MAX_BRIGHTNESS);
+      syncBrightnessUi();
+    }
     updatePlaybackButton();
   } catch (err) {
     console.warn("led state", err);
+  }
+}
+
+function scheduleBrightnessUpdate(value) {
+  clearTimeout(state.brightnessTimer);
+  state.globalBrightness = clamp(value, 1, MAX_BRIGHTNESS);
+  syncBrightnessUi();
+  state.brightnessTimer = setTimeout(() => {
+    applyBrightness(state.globalBrightness);
+  }, 250);
+}
+
+async function applyBrightness(value) {
+  try {
+    await fetch("/api/led/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ brightness: value, remember: true }),
+    });
+    state.ledState = state.ledState || {};
+    state.ledState.brightness = value;
+    if (state.info) {
+      state.info.led_engine = state.info.led_engine || {};
+      state.info.led_engine.brightness = value;
+    }
+  } catch (err) {
+    console.error("brightness", err);
+    notify(t("toast_save_failed"), "error");
   }
 }
 
@@ -429,6 +495,23 @@ function formatOtaState(state, err) {
     return `${text} (${err})`;
   }
   return text;
+}
+
+function setOtaStatus(text) {
+  setText("otaStatus", text);
+}
+
+function clamp(val, min, max) {
+  return Math.min(Math.max(val, min), max);
+}
+
+function syncBrightnessUi() {
+  const slider = qs("brightnessGlobal");
+  const label = qs("brightnessValue");
+  if (!slider || !label) return;
+  slider.value = state.globalBrightness;
+  const pct = Math.round((state.globalBrightness / MAX_BRIGHTNESS) * 100);
+  label.textContent = `${pct}%`;
 }
 
 function formatAge(ms) {
@@ -697,16 +780,26 @@ function updateOverview() {
   const cfg = state.config || {};
 
   const fwName = info.fw_name || info.fw || "LEDBrain";
-  const fwVersion = info.fw_version ? ` ${info.fw_version}` : "";
-  const fwIdf = info.idf ? ` · IDF ${info.idf}` : "";
-  const fw = `${fwName}${fwVersion}${fwIdf}`.trim();
+  const fwVersion = info.fw_version || "";
+  const fwIdf = info.idf ? ` (IDF ${info.idf})` : "";
+  const fwLabel = [fwName, fwVersion].filter(Boolean).join(" ");
+  const fw = `${fwLabel}${fwIdf}`.trim();
   const device = cfg.network?.hostname || "ledbrain";
-  qs("chipIp").textContent = `IP: ${info.ip || "-"}`;
-  qs("chipVersion").textContent = fw;
-  qs("valDevice").textContent = device;
-  qs("valFirmware").textContent = fw;
-  qs("valOta").textContent = formatOtaState(info.ota_state, info.ota_error);
-  qs("valUptime").textContent = info.uptime_s ? formatUptime(info.uptime_s) : "-";
+  setText("chipIp", `IP: ${info.ip || "-"}`);
+  setText("valDevice", device);
+  setText("valFirmware", fw || "-");
+  setText("valOta", formatOtaState(info.ota_state, info.ota_error));
+  setText("valUptime", info.uptime_s ? formatUptime(info.uptime_s) : "-");
+  const build = info.fw_build_date ? `${info.fw_build_date} ${info.fw_build_time || ""}`.trim() : "-";
+  setText("valSystemFw", fwLabel || "-");
+  setText("valSystemIdf", info.idf || "-");
+  setText("valSystemBuild", build && build.trim() ? build : "-");
+  setText("valCurrentVersion", fwVersion || fwLabel || "-");
+  if (state.latestRelease) {
+    setText("valAvailableVersion", state.latestRelease.tag || t("ota_no_version"));
+  }
+  syncBrightnessUi();
+
 
   qs("valIp").textContent = info.ip || "-";
   qs("valGateway").textContent = cfg.network?.gateway || "-";
@@ -735,7 +828,12 @@ function updateOverview() {
   }
 }
 function updateDhcpUi() {
-  const disabled = qs("dhcp").checked;
+  const dhcpOn = qs("dhcp").checked;
+  const label = qs("dhcpLabel");
+  if (label) {
+    label.textContent = dhcpOn ? t("network_dhcp_on") || "DHCP (automatic)" : t("network_dhcp_off") || "Static IP (manual)";
+  }
+  const disabled = dhcpOn;
   ["ip", "mask", "gw", "dns"].forEach((id) => {
     const el = qs(id);
     if (el) el.disabled = disabled;
@@ -813,13 +911,17 @@ async function refreshInfo(showToast = false) {
   try {
     const info = await (await fetch("/api/info")).json();
     state.info = info;
-     state.lastInfoRefresh = Date.now();
-     if (info?.led_engine && typeof info.led_engine.enabled === "boolean") {
-       state.ledState.enabled = info.led_engine.enabled;
-       updatePlaybackButton();
-     }
+    if (info?.led_engine && typeof info.led_engine.brightness === "number") {
+      state.globalBrightness = clamp(info.led_engine.brightness, 1, MAX_BRIGHTNESS);
+      syncBrightnessUi();
+    }
+    state.lastInfoRefresh = Date.now();
+    if (info?.led_engine && typeof info.led_engine.enabled === "boolean") {
+      state.ledState.enabled = info.led_engine.enabled;
+      updatePlaybackButton();
+    }
     updateOverview();
-     startUptimeTicker();
+    startUptimeTicker();
     if (showToast) {
       notify(t("toast_refreshed"), "ok");
     }
@@ -1853,6 +1955,10 @@ async function loadConfig() {
     const cfg = await (await fetch("/api/get_config")).json();
     state.config = cfg;
     syncLanguageSelects(cfg.lang || "pl");
+    if (cfg.led_engine && typeof cfg.led_engine.global_brightness === "number") {
+      state.globalBrightness = clamp(cfg.led_engine.global_brightness, 1, MAX_BRIGHTNESS);
+      syncBrightnessUi();
+    }
     qs("dhcp").checked = cfg.network?.use_dhcp ?? true;
     qs("host").value = cfg.network?.hostname || "ledbrain";
     qs("ip").value = cfg.network?.static_ip || "";
@@ -1986,10 +2092,61 @@ async function factoryReset() {
   }
 }
 
+async function checkOta() {
+  if (state.otaChecking) return;
+  state.otaChecking = true;
+  const applyBtn = qs("btnOtaApply");
+  if (applyBtn) applyBtn.disabled = true;
+  try {
+    setOtaStatus(t("ota_status_checking"));
+    const res = await fetch(OTA_RELEASE_URL, {
+      headers: { Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const asset = Array.isArray(data.assets)
+      ? data.assets.find((a) => (a.name || "").toLowerCase().endswith(".bin"))
+      : null;
+    const tag = data.tag_name || data.name || "";
+    const url = asset?.browser_download_url || null;
+    state.latestRelease = { tag, url };
+    setText("valAvailableVersion", tag || t("ota_no_version"));
+    const current = (state.info?.fw_version || "").replace(/^v/i, "").trim();
+    const latest = (tag || "").replace(/^v/i, "").trim();
+    const isNewer = latest && (!current || latest !== current);
+    const canApply = Boolean(url && isNewer);
+    if (applyBtn) applyBtn.disabled = !canApply;
+    setOtaStatus(
+      isNewer && tag
+        ? t("ota_status_available").replace("{version}", tag)
+        : t("ota_status_latest")
+    );
+  } catch (err) {
+    console.error(err);
+    state.latestRelease = null;
+    setText("valAvailableVersion", "-");
+    setOtaStatus(t("ota_status_error"));
+    notify(t("ota_status_error"), "error");
+  } finally {
+    state.otaChecking = false;
+  }
+}
+
 async function triggerOta() {
+  const rel = state.latestRelease;
+  const target = (rel?.tag || state.info?.fw_version || t("ota_unknown_version")).trim();
+  const confirmMsg = t("confirm_ota_install").replace("{version}", target);
+  if (!window.confirm(confirmMsg)) return;
   try {
     notify(t("toast_ota_start"), "ok");
-    const res = await fetch("/api/ota/update", { method: "POST" });
+    setOtaStatus(t("ota_status_installing").replace("{version}", target));
+    const body = rel?.url ? JSON.stringify({ url: rel.url }) : undefined;
+    const res = await fetch("/api/ota/update", {
+      method: "POST",
+      ...(body ? { body } : {}),
+    });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -1998,6 +2155,7 @@ async function triggerOta() {
   } catch (err) {
     console.error(err);
     notify(t("toast_ota_failed"), "error");
+    setOtaStatus(t("ota_status_error"));
   }
 }
 
@@ -2066,8 +2224,15 @@ function initEvents() {
   qs("btnMqttTest").addEventListener("click", () => notify(t("toast_todo"), "warn"));
 
   qs("btnOpenHA").addEventListener("click", () =>
-    window.open("http://homeassistant.local", "_blank")
+    window.open("http://homeassistant.local:8123", "_blank")
   );
+  const brightnessSlider = qs("brightnessGlobal");
+  if (brightnessSlider) {
+    brightnessSlider.addEventListener("input", (e) => {
+      const val = clamp(parseInt(e.target.value, 10) || 0, 1, MAX_BRIGHTNESS);
+      scheduleBrightnessUpdate(val);
+    });
+  }
 
   const btnPlayback = qs("btnPlayback");
   if (btnPlayback) {
@@ -2076,10 +2241,8 @@ function initEvents() {
 
   qs("btnSaveSystem").addEventListener("click", saveSystem);
   qs("btnFactoryReset").addEventListener("click", factoryReset);
-  const btnOta = qs("btnOta");
-  if (btnOta) {
-    btnOta.addEventListener("click", triggerOta);
-  }
+  qs("btnOtaCheck")?.addEventListener("click", checkOta);
+  qs("btnOtaApply")?.addEventListener("click", triggerOta);
   const btnRescan = qs("btnWledRescan");
   if (btnRescan) {
     btnRescan.addEventListener("click", rescanWled);
