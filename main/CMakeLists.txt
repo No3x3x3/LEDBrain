@@ -30,5 +30,6 @@ idf_component_register(
   PRIV_REQUIRES 
       mdns
       esp_driver_gpio
+      app_update
       led_engine
 )
