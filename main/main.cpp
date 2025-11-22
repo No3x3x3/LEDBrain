@@ -5,6 +5,8 @@
 #include "mqtt_ha.hpp"
 #include "web_setup.hpp"
 #include "wled_discovery.hpp"
+#include "wled_effects.hpp"
+#include "snapclient_light.hpp"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -17,6 +19,7 @@ extern void heartbeat_task(void*);
 static const char* TAG = "main";
 static LedEngineRuntime s_led_engine;
 static AppConfig s_cfg{};
+static WledEffectsRuntime s_wled_fx;
 
 extern "C" void app_main(void) {
   ESP_ERROR_CHECK(esp_netif_init());
@@ -41,7 +44,11 @@ extern "C" void app_main(void) {
   }
 
   wled_discovery_start(s_cfg);
-  start_web_server(s_cfg, &s_led_engine);
+  if (s_cfg.led_engine.audio.source == AudioSourceType::Snapcast && s_cfg.led_engine.audio.snapcast.enabled) {
+    snapclient_light_start(s_cfg.led_engine.audio.snapcast);
+  }
+  s_wled_fx.start(&s_cfg, &s_led_engine);
+  start_web_server(s_cfg, &s_led_engine, &s_wled_fx);
   wled_discovery_trigger_scan();
 
   if (s_cfg.mqtt.configured && !s_cfg.mqtt.host.empty()) {

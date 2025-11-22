@@ -33,14 +33,29 @@ struct WledDeviceConfig {
   bool auto_discovered{false};
 };
 
+struct WledEffectBinding {
+  std::string device_id{};
+  uint16_t segment_index{0};
+  bool enabled{true};
+  bool ddp{true};
+  std::string audio_channel{"mix"};  // mix | left | right
+  EffectAssignment effect{};
+};
+
+struct WledEffectsConfig {
+  uint16_t target_fps{60};
+  std::vector<WledEffectBinding> bindings{};
+};
+
 struct AppConfig {
   std::string lang{"pl"};
   NetworkConfig network{};
   MqttConfig mqtt{};
   bool autostart{false};
   std::vector<WledDeviceConfig> wled_devices{};
+  WledEffectsConfig wled_effects{};
   LedHardwareConfig led_engine{};
-  uint32_t schema_version{5};
+  uint32_t schema_version{8};
 };
 
 esp_err_t config_service_init();

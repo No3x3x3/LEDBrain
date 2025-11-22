@@ -31,6 +31,17 @@ constexpr int RMII_RXD0_GPIO = 29;
 constexpr int RMII_RXD1_GPIO = 30;
 constexpr int RMII_CLK_IN_GPIO_NUM = 50;
 
+static uint64_t gpio_mask(gpio_num_t gpio) {
+  if (gpio < 0) {
+    return 0;
+  }
+  const auto idx = static_cast<uint32_t>(gpio);
+  if (idx >= 64) {
+    return 0;
+  }
+  return 1ULL << idx;
+}
+
 void configure_static_ip(const NetworkConfig& cfg) {
   esp_netif_ip_info_t ip_info{};
   ESP_ERROR_CHECK(esp_netif_str_to_ip4(cfg.static_ip.c_str(), &ip_info.ip));
@@ -47,31 +58,37 @@ void configure_static_ip(const NetworkConfig& cfg) {
 
 void ensure_phy_powered() {
   if (PHY_POWER_GPIO != GPIO_NUM_NC) {
-    gpio_config_t cfg = {
-      .pin_bit_mask = 1ULL << static_cast<uint32_t>(PHY_POWER_GPIO),
-      .mode = GPIO_MODE_OUTPUT,
-      .pull_up_en = GPIO_PULLUP_DISABLE,
-      .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&cfg));
-    gpio_set_level(PHY_POWER_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_config_t cfg{};
+    cfg.pin_bit_mask = gpio_mask(PHY_POWER_GPIO);
+    cfg.mode = GPIO_MODE_OUTPUT;
+    cfg.pull_up_en = GPIO_PULLUP_DISABLE;
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    cfg.intr_type = GPIO_INTR_DISABLE;
+    if (cfg.pin_bit_mask) {
+      ESP_ERROR_CHECK(gpio_config(&cfg));
+      gpio_set_level(PHY_POWER_GPIO, 1);
+      vTaskDelay(pdMS_TO_TICKS(50));
+    } else {
+      ESP_LOGW(TAG, "PHY power GPIO %d outside mask range, skipped", static_cast<int>(PHY_POWER_GPIO));
+    }
   }
 
   if (PHY_RESET_GPIO != GPIO_NUM_NC) {
-    gpio_config_t cfg = {
-      .pin_bit_mask = 1ULL << static_cast<uint32_t>(PHY_RESET_GPIO),
-      .mode = GPIO_MODE_OUTPUT,
-      .pull_up_en = GPIO_PULLUP_DISABLE,
-      .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&cfg));
-    gpio_set_level(PHY_RESET_GPIO, 0);
-    vTaskDelay(pdMS_TO_TICKS(50));
-    gpio_set_level(PHY_RESET_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_config_t cfg{};
+    cfg.pin_bit_mask = gpio_mask(PHY_RESET_GPIO);
+    cfg.mode = GPIO_MODE_OUTPUT;
+    cfg.pull_up_en = GPIO_PULLUP_DISABLE;
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    cfg.intr_type = GPIO_INTR_DISABLE;
+    if (cfg.pin_bit_mask) {
+      ESP_ERROR_CHECK(gpio_config(&cfg));
+      gpio_set_level(PHY_RESET_GPIO, 0);
+      vTaskDelay(pdMS_TO_TICKS(50));
+      gpio_set_level(PHY_RESET_GPIO, 1);
+      vTaskDelay(pdMS_TO_TICKS(50));
+    } else {
+      ESP_LOGW(TAG, "PHY reset GPIO %d outside mask range, skipped", static_cast<int>(PHY_RESET_GPIO));
+    }
   }
 }
 

@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
   lang: "pl",
   config: null,
   info: null,
@@ -9,6 +9,7 @@ const state = {
   timers: { info: null, wled: null, uptime: null },
   lastInfoRefresh: 0,
   selectedFxSegment: null,
+  selectedWledDevice: null,
   latestRelease: null,
   otaChecking: false,
   globalBrightness: 255,
@@ -28,18 +29,38 @@ const EFFECT_CATALOG = [
   "Rainbow",
   "Rainbow Runner",
   "Rainbow Bands",
+  "Rain",
+  "Rain (Dual)",
   "Meteor",
   "Meteor Smooth",
+  "Power+",
+  "Power Cycle",
+  "Energy Flow",
+  "Energy Burst",
+  "Energy Waves",
   "Candle Multi",
   "Candle",
+  "Matrix",
+  "Waves",
+  "Plasma",
+  "Ripple Flow",
+  "Heartbeat",
+  "Aura",
+  "Hyperspace",
   "Ripple",
   "Pacifica",
   "Theater",
   "Scanner",
+  "Scanner Dual",
   "Noise",
   "Sinelon",
   "Fire 2012",
   "Fireworks",
+  "Beat Pulse",
+  "Beat Bars",
+  "Beat Scatter",
+  "Beat Light",
+  "Strobe",
 ];
 const AUDIO_MODES = ["spectrum", "bass", "beat", "tempo", "energy", "vibes"];
 const AUDIO_PROFILES = [
@@ -48,6 +69,57 @@ const AUDIO_PROFILES = [
   { value: "wled_bass_boost", label: "audio_profile_wled_bass" },
   { value: "ledfx_energy", label: "audio_profile_ledfx_energy" },
   { value: "ledfx_tempo", label: "audio_profile_ledfx_tempo" },
+];
+const EFFECT_LIBRARY = [
+  {
+    category: "Ambient",
+    effects: [
+      { name: "Rain", desc: "Falling drops with cool tones" },
+      { name: "Rain (Dual)", desc: "Dual-layer rain flow" },
+      { name: "Waves", desc: "Smooth rolling gradients" },
+      { name: "Plasma", desc: "Animated gradients" },
+      { name: "Aura", desc: "Soft ambient glow" },
+      { name: "Ripple Flow", desc: "Ripples moving across LEDs" },
+      { name: "Matrix", desc: "Matrix-style falling glyphs" },
+    ],
+  },
+  {
+    category: "Energy",
+    effects: [
+      { name: "Power+", desc: "Punchy energy beams" },
+      { name: "Power Cycle", desc: "Cycled energy pulses" },
+      { name: "Energy Flow", desc: "Directional energy trails" },
+      { name: "Energy Burst", desc: "Short bursts, beat friendly" },
+      { name: "Energy Waves", desc: "Layered waves, fast" },
+      { name: "Hyperspace", desc: "Deep-space warp lines" },
+    ],
+  },
+  {
+    category: "Rhythm",
+    effects: [
+      { name: "Beat Pulse", desc: "Pulse on beat" },
+      { name: "Beat Bars", desc: "Bars scaled by beat" },
+      { name: "Beat Scatter", desc: "Beat-driven scatter" },
+      { name: "Beat Light", desc: "Simple beat flashes" },
+      { name: "Strobe", desc: "Hard strobe" },
+    ],
+  },
+  {
+    category: "Classic",
+    effects: [
+      { name: "Rainbow Runner", desc: "Fast rainbow runner" },
+      { name: "Rainbow Bands", desc: "Striped rainbow bands" },
+      { name: "Scanner", desc: "Larson scanner" },
+      { name: "Scanner Dual", desc: "Dual-direction scanner" },
+      { name: "Theater", desc: "Theater chase" },
+      { name: "Noise", desc: "Perlin noise" },
+      { name: "Fireworks", desc: "Bursts and sparks" },
+      { name: "Fire 2012", desc: "Classic fire" },
+      { name: "Heartbeat", desc: "Heartbeat pulse" },
+      { name: "Ripple", desc: "Single ripple" },
+      { name: "Rainbow", desc: "Rainbow loop" },
+    ],
+  },
 ];
 const OTA_RELEASE_URL = "https://api.github.com/repos/No3x3x3/LEDBrain/releases/latest";
 const MAX_BRIGHTNESS = 255;
@@ -250,6 +322,7 @@ function renderLang() {
     fxAudioSubtitle: "fx_audio_subtitle",
     fxSceneTitle: "fx_scene_title",
     fxSceneSubtitle: "fx_scene_subtitle",
+    lblFxEffectPicker: "fx_effect_picker",
     lblFxDirection: "fx_direction",
     lblFxScatter: "fx_scatter",
     lblFxFadeIn: "fx_fade_in",
@@ -775,6 +848,202 @@ function renderLightsDashboard() {
   });
 }
 
+function renderWledDetail(dev) {
+  const detail = qs("deviceDetailBody");
+  if (!detail) return;
+  if (!dev) {
+    detail.innerHTML = `<div class="placeholder muted">${t("device_detail_placeholder") || "Select device"}</div>`;
+    return;
+  }
+  const fx = ensureWledEffectsConfig();
+  const binding = getWledBinding(dev.id || dev.address || dev.name || "wled");
+  detail.innerHTML = `
+    <div class="device-meta-grid">
+      <div class="device-meta"><strong>${t("lights_label_host") || "Host"}</strong><span>${dev.address || dev.ip || "-"}</span></div>
+      <div class="device-meta"><strong>${t("wled_table_leds") || "LEDs"}</strong><span>${dev.leds || t("not_set")}</span></div>
+      <div class="device-meta"><strong>${t("wled_table_segments") || "Segments"}</strong><span>${dev.segments || t("not_set")}</span></div>
+      <div class="device-meta"><strong>${t("wled_table_last_seen") || "Last seen"}</strong><span>${formatAgeMs(dev.age_ms)}</span></div>
+      <div class="device-meta"><strong>${t("wled_table_status") || "Status"}</strong><span>${dev.online ? (t("wled_status_online") || "online") : (t("wled_status_offline") || "offline")}</span></div>
+    </div>
+    <div class="form-grid compact">
+      <label>${t("target_fps") || "Target FPS"}
+        <input type="number" min="1" max="240" id="wledFxFps" value="${fx.target_fps || 60}">
+      </label>
+    </div>
+    <div class="form-grid">
+      <label>${t("fx_effect_picker") || "Effect"}
+        <input list="effectCatalog" id="wledFxEffect" value="${binding.effect?.effect || ""}">
+      </label>
+      <label>${t("colFxPreset") || "Preset"}
+        <input id="wledFxPreset" value="${binding.effect?.preset || ""}">
+      </label>
+      <label>${t("fx_color1") || "Color 1"}
+        <input type="color" id="wledFxColor1" value="${binding.effect?.color1 || "#ffffff"}">
+      </label>
+      <label>${t("fx_color2") || "Color 2"}
+        <input type="color" id="wledFxColor2" value="${binding.effect?.color2 || "#ff6600"}">
+      </label>
+      <label>${t("fx_color3") || "Color 3"}
+        <input type="color" id="wledFxColor3" value="${binding.effect?.color3 || "#0033ff"}">
+      </label>
+      <label>${t("fx_brightness_override") || "Brightness"}
+        <input type="number" min="0" max="255" id="wledFxBrightness" value="${binding.effect?.brightness ?? 255}">
+      </label>
+      <label>${t("colFxIntensity") || "Intensity"}
+        <input type="number" min="0" max="255" id="wledFxIntensity" value="${binding.effect?.intensity ?? 128}">
+      </label>
+      <label>${t("colFxSpeed") || "Speed"}
+        <input type="number" min="0" max="255" id="wledFxSpeed" value="${binding.effect?.speed ?? 128}">
+      </label>
+      <label>${t("colFxAudioProfile") || "Audio profile"}
+        <select id="wledFxAudioProfile">
+          ${renderAudioProfileOptions(binding.effect?.audio_profile || "default")}
+        </select>
+      </label>
+      <label>${t("wled_segment_index") || "Segment"}
+        <input type="number" min="0" max="${dev.segments || 1}" id="wledFxSegment" value="${binding.segment_index || 0}">
+      </label>
+      <label>${t("wled_audio_channel") || "Audio channel"}
+        <select id="wledFxAudioChannel">
+          <option value="mix" ${binding.audio_channel === "mix" ? "selected" : ""}>${t("audio_mix") || "Mix (L+R)"}</option>
+          <option value="left" ${binding.audio_channel === "left" ? "selected" : ""}>${t("audio_left") || "Left"}</option>
+          <option value="right" ${binding.audio_channel === "right" ? "selected" : ""}>${t("audio_right") || "Right"}</option>
+        </select>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="wledFxEnabled" ${binding.enabled !== false ? "checked" : ""}>
+        <span></span> ${t("badge_enabled") || "Enabled"}
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="wledFxDdp" ${binding.ddp !== false ? "checked" : ""}>
+        <span></span> ${t("wled_ddp") || "DDP stream"}
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="wledFxAudioLink" ${binding.effect?.audio_link ? "checked" : ""}>
+        <span></span> ${t("colFxAudioLink") || "Audio link"}
+      </label>
+    </div>
+    <div class="actions">
+      <button class="primary" id="btnSaveWledFx">${t("btn_save_led") || "Save"}</button>
+    </div>
+  `;
+
+  const fpsInput = qs("wledFxFps");
+  fpsInput?.addEventListener("change", (e) => {
+    const val = parseInt(e.target.value, 10);
+    fx.target_fps = Math.max(1, Math.min(Number.isFinite(val) ? val : 60, 240));
+    e.target.value = fx.target_fps;
+  });
+
+  const mapNumber = [
+    ["wledFxBrightness", "brightness", 0, 255],
+    ["wledFxIntensity", "intensity", 0, 255],
+    ["wledFxSpeed", "speed", 0, 255],
+  ];
+  mapNumber.forEach(([id, field, min, max]) => {
+    const input = qs(id);
+    input?.addEventListener("change", (ev) => {
+      let val = parseInt(ev.target.value, 10);
+      if (!Number.isFinite(val)) val = 0;
+      val = Math.max(min, Math.min(val, max));
+      binding.effect[field] = val;
+      ev.target.value = val;
+    });
+  });
+
+  const colorMap = [
+    ["wledFxColor1", "color1"],
+    ["wledFxColor2", "color2"],
+    ["wledFxColor3", "color3"],
+  ];
+  colorMap.forEach(([id, field]) => {
+    const input = qs(id);
+    input?.addEventListener("change", (ev) => {
+      binding.effect[field] = ev.target.value || binding.effect[field] || "";
+    });
+  });
+
+  qs("wledFxEffect")?.addEventListener("change", (ev) => {
+    binding.effect.effect = ev.target.value || "";
+  });
+  qs("wledFxPreset")?.addEventListener("change", (ev) => {
+    binding.effect.preset = ev.target.value || "";
+  });
+  qs("wledFxSegment")?.addEventListener("change", (ev) => {
+    let val = parseInt(ev.target.value, 10);
+    if (!Number.isFinite(val) || val < 0) val = 0;
+    binding.segment_index = val;
+    ev.target.value = val;
+  });
+  qs("wledFxEnabled")?.addEventListener("change", (ev) => {
+    binding.enabled = ev.target.checked;
+  });
+  qs("wledFxDdp")?.addEventListener("change", (ev) => {
+    binding.ddp = ev.target.checked;
+  });
+  qs("wledFxAudioLink")?.addEventListener("change", (ev) => {
+    binding.effect.audio_link = ev.target.checked;
+  });
+  qs("wledFxAudioProfile")?.addEventListener("change", (ev) => {
+    binding.effect.audio_profile = ev.target.value || "default";
+  });
+  qs("wledFxAudioChannel")?.addEventListener("change", (ev) => {
+    binding.audio_channel = ev.target.value || "mix";
+  });
+  qs("btnSaveWledFx")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    saveWledEffects();
+  });
+}
+
+function renderDeviceExplorer() {
+  const list = qs("deviceList");
+  if (!list) return;
+  const devices = mergeWledDevices();
+  list.innerHTML = "";
+  if (!devices.length) {
+    const empty = document.createElement("div");
+    empty.className = "placeholder muted";
+    empty.textContent = t("wled_empty_hint") || "No WLED devices";
+    list.appendChild(empty);
+    renderWledDetail(null);
+    return;
+  }
+  if (!state.selectedWledDevice && devices.length) {
+    state.selectedWledDevice = devices[0].id || devices[0].address || devices[0].name;
+  }
+  devices.forEach((dev) => {
+    const btn = document.createElement("button");
+    const deviceId = dev.id || dev.address || dev.name;
+    btn.className = `device-list-item ${state.selectedWledDevice === deviceId ? "active" : ""}`;
+    const name = document.createElement("strong");
+    name.textContent = dev.name || dev.id || dev.address || "WLED";
+    btn.appendChild(name);
+    const meta = document.createElement("div");
+    meta.className = "device-list-meta";
+    if (dev.address || dev.ip) {
+      const span = document.createElement("span");
+      span.textContent = dev.address || dev.ip;
+      meta.appendChild(span);
+    }
+    if (dev.version) {
+      const span = document.createElement("span");
+      span.textContent = dev.version;
+      meta.appendChild(span);
+    }
+    btn.appendChild(meta);
+    btn.appendChild(createStatusPill(dev.online ? (t("wled_status_online") || "online") : (t("wled_status_offline") || "offline"), dev.online ? "ok" : "warn"));
+    btn.addEventListener("click", () => {
+      state.selectedWledDevice = deviceId;
+      renderDeviceExplorer();
+      renderWledDetail(dev);
+    });
+    list.appendChild(btn);
+  });
+  const selected = devices.find((d) => (d.id || d.address || d.name) === state.selectedWledDevice);
+  renderWledDetail(selected || devices[0]);
+}
+
 function updateOverview() {
   const info = state.info || {};
   const cfg = state.config || {};
@@ -936,10 +1205,13 @@ async function loadWledDevices(showToast = false) {
     const res = await fetch("/api/wled/list");
     const data = await res.json();
     state.wledDevices = data.devices || [];
+    console.log("wled devices", state.wledDevices.length, state.wledDevices);
     renderWledDevices();
     renderLightsDashboard();
+    renderDeviceExplorer();
     if (showToast) {
-      notify(t("toast_wled_updated"), "ok");
+      const count = Array.isArray(state.wledDevices) ? state.wledDevices.length : 0;
+      notify(`${t("toast_wled_updated") || "WLED updated"} (${count})`, "ok");
     }
   } catch (err) {
     console.error(err);
@@ -977,6 +1249,57 @@ function defaultAudioConfig() {
   };
 }
 
+function ensureWledEffectsConfig() {
+  if (!state.config) {
+    state.config = {};
+  }
+  if (!state.config.wled_effects) {
+    state.config.wled_effects = { target_fps: 60, bindings: [] };
+  }
+  const fx = state.config.wled_effects;
+  if (!Array.isArray(fx.bindings)) {
+    fx.bindings = [];
+  }
+  if (!fx.target_fps || fx.target_fps < 1) {
+    fx.target_fps = 60;
+  }
+  return fx;
+}
+
+function getWledBinding(deviceId) {
+  const fx = ensureWledEffectsConfig();
+  let binding = fx.bindings.find((b) => b.device_id === deviceId);
+  if (!binding) {
+    binding = {
+      device_id: deviceId,
+      segment_index: 0,
+      enabled: true,
+      ddp: true,
+      audio_channel: "stereo",
+      effect: {
+        effect: "Solid",
+        brightness: 255,
+        intensity: 128,
+        speed: 128,
+        color1: "#ffffff",
+        color2: "#ff6600",
+        color3: "#0033ff",
+        preset: "",
+        audio_link: false,
+        audio_profile: "default",
+      },
+    };
+    fx.bindings.push(binding);
+  }
+  if (!binding.effect) {
+    binding.effect = { effect: "Solid", brightness: 255, intensity: 128, speed: 128, audio_profile: "default" };
+  }
+  if (!binding.audio_channel) {
+    binding.audio_channel = "stereo";
+  }
+  return binding;
+}
+
 function computeAutoCurrentLimit(led) {
   if (!led) return 0;
   const voltage = Number(led.power_supply_voltage || 0);
@@ -1004,7 +1327,7 @@ function ensureLedEngineConfig() {
       enable_dma: true,
       segments: [],
       audio: defaultAudioConfig(),
-      effects: { default_engine: "wled", assignments: [] },
+      effects: { default_engine: "ledfx", assignments: [] },
     };
   }
   const led = state.config.led_engine;
@@ -1023,7 +1346,7 @@ function ensureLedEngineConfig() {
   led.effects =
     led.effects ||
     {
-      default_engine: "wled",
+      default_engine: "ledfx",
       assignments: [],
     };
   led.driver = led.driver || "esp_rmt";
@@ -1095,7 +1418,7 @@ function ensureEffectAssignment(segmentId) {
   if (!assignment) {
     assignment = {
       segment_id: segmentId,
-      engine: led.effects.default_engine || "wled",
+      engine: led.effects.default_engine || "ledfx",
       effect: "Solid",
       preset: "",
       audio_link: false,
@@ -1175,6 +1498,32 @@ function ensureEffectAssignment(segmentId) {
   return assignment;
 }
 
+function findEffectMeta(name) {
+  const lookup = (name || "").toLowerCase();
+  for (const group of EFFECT_LIBRARY) {
+    for (const eff of group.effects) {
+      if (eff.name.toLowerCase() === lookup) {
+        return eff;
+      }
+    }
+  }
+  return null;
+}
+
+function renderEffectPicker(current) {
+  const select = qs("fxEffectPicker");
+  if (!select) return;
+  const options = EFFECT_LIBRARY.map((group) => {
+    const items = group.effects
+      .map(
+        (eff) => `<option value="${eff.name}" ${eff.name === current ? "selected" : ""}>${eff.name}</option>`
+      )
+      .join("");
+    return `<optgroup label="${group.category}">${items}</optgroup>`;
+  }).join("");
+  select.innerHTML = `<option value="">${t("pin_select")}</option>${options}`;
+}
+
 function renderLedConfig() {
   const led = ensureLedEngineConfig();
   if (!led) return;
@@ -1184,7 +1533,7 @@ function renderLedConfig() {
   populateAudioForm(led);
   const defEngine = qs("defaultEffectEngine");
   if (defEngine) {
-    defEngine.value = led.effects.default_engine || "wled";
+    defEngine.value = led.effects.default_engine || "ledfx";
   }
 }
 
@@ -1459,7 +1808,7 @@ function renderFxSegmentList() {
     </button>`
   );
   const wled = (state.wledDevices || []).map(
-    (dev) => `<div class="chip muted" title="${dev.address || ""}">${dev.name || dev.id} · ${dev.segments || 1} seg</div>`
+    (dev) => `<div class="chip muted" title="${dev.address || ""}">${dev.name || dev.id} ┬Ě ${dev.segments || 1} seg</div>`
   );
   container.innerHTML = `
     <div class="fx-group">
@@ -1483,8 +1832,18 @@ function renderFxDetail() {
     return;
   }
   const assign = ensureEffectAssignment(seg.id);
+  renderEffectPicker(assign.effect);
   if (output) {
-    output.textContent = `${seg.name || seg.id} • ${seg.led_count || 0} LED`;
+    output.textContent = `${seg.name || seg.id} ? ${seg.led_count || 0} LED`;
+  }
+  const picker = qs("fxEffectPicker");
+  if (picker) {
+    picker.value = assign.effect || "";
+    const meta = findEffectMeta(assign.effect);
+    const desc = qs("fxEffectDescription");
+    if (desc) {
+      desc.textContent = meta?.desc || t("effects_hint_pick") || "";
+    }
   }
   const map = {
     fxDirection: assign.direction,
@@ -1534,6 +1893,16 @@ function handleEffectRowClick(event) {
   const row = event.target.closest("tr[data-segid]");
   if (!row) return;
   setSelectedFxSegment(row.dataset.segid);
+}
+
+function handleEffectPickerChange(event) {
+  const assign = getSelectedFxAssignment();
+  if (!assign) return;
+  assign.effect = event.target.value || "";
+  const led = ensureLedEngineConfig();
+  renderEffectRows(led);
+  renderFxDetail();
+  renderLightsDashboard();
 }
 
 function handleFxSegmentChipClick(event) {
@@ -1859,6 +2228,21 @@ async function saveLedConfig() {
   }
 }
 
+async function saveWledEffects() {
+  ensureWledEffectsConfig();
+  try {
+    await fetch("/api/wled/effects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wled_effects: state.config.wled_effects }),
+    });
+    notify(t("toast_led_saved") || "Saved", "ok");
+  } catch (err) {
+    console.error(err);
+    notify(t("toast_save_failed"), "error");
+  }
+}
+
 async function loadLedPins() {
   try {
     const res = await fetch("/api/led/pins");
@@ -1873,7 +2257,7 @@ async function rescanWled() {
   try {
     notify(t("toast_wled_rescan"), "warn");
     await fetch("/api/wled/rescan", { method: "POST" });
-    setTimeout(() => loadWledDevices(true), 1200);
+    setTimeout(() => loadWledDevices(true), 1400);
   } catch (err) {
     console.error(err);
     notify(t("toast_save_failed"), "error");
@@ -1954,6 +2338,7 @@ async function loadConfig() {
   try {
     const cfg = await (await fetch("/api/get_config")).json();
     state.config = cfg;
+    ensureWledEffectsConfig();
     syncLanguageSelects(cfg.lang || "pl");
     if (cfg.led_engine && typeof cfg.led_engine.global_brightness === "number") {
       state.globalBrightness = clamp(cfg.led_engine.global_brightness, 1, MAX_BRIGHTNESS);
@@ -1981,6 +2366,7 @@ async function loadConfig() {
 
     ensureLedEngineConfig();
     renderLightsDashboard();
+    renderDeviceExplorer();
     await loadLang(cfg.lang || "pl");
     await refreshInfo();
     await loadLedState();
@@ -2269,6 +2655,10 @@ function initEvents() {
     fxBody.addEventListener("input", handleEffectInput);
     fxBody.addEventListener("change", handleEffectInput);
     fxBody.addEventListener("click", handleEffectRowClick);
+  }
+  const fxPicker = qs("fxEffectPicker");
+  if (fxPicker) {
+    fxPicker.addEventListener("change", handleEffectPickerChange);
   }
   const btnAddSegment = qs("btnAddSegment");
   if (btnAddSegment) {

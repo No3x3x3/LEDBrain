@@ -10,6 +10,7 @@
 #include "led_engine.hpp"
 #include "led_engine/pinout.hpp"
 #include "led_engine/audio_pipeline.hpp"
+#include "wled_effects.hpp"
 #include "esp_app_format.h"
 #include "esp_ota_ops.h"
 #include "ota.hpp"
@@ -37,6 +38,7 @@ static esp_err_t send_mem(httpd_req_t* req, const unsigned char* begin, const un
 
 static AppConfig* s_cfg = nullptr;
 static LedEngineRuntime* s_led_runtime = nullptr;
+static WledEffectsRuntime* s_wled_fx_runtime = nullptr;
 
 static esp_err_t root_get(httpd_req_t* req){ return send_mem(req, index_html_start, index_html_end, "text/html"); }
 static esp_err_t js_get(httpd_req_t* req){ return send_mem(req, app_js_start, app_js_end, "application/javascript"); }
@@ -125,6 +127,9 @@ static esp_err_t api_save_mqtt(httpd_req_t* req){
     if (config_save(*s_cfg) != ESP_OK) {
       cJSON_Delete(root);
       return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to persist mqtt config");
+    }
+    if (s_wled_fx_runtime) {
+      s_wled_fx_runtime->update_config(*s_cfg);
     }
   }
   cJSON_Delete(root);
@@ -359,6 +364,9 @@ static esp_err_t api_wled_add(httpd_req_t* req) {
   }
   wled_discovery_register_manual(entry);
   wled_discovery_trigger_scan();
+  if (s_wled_fx_runtime) {
+    s_wled_fx_runtime->update_config(*s_cfg);
+  }
   httpd_resp_sendstr(req, "OK");
   return ESP_OK;
 }
@@ -407,6 +415,9 @@ static esp_err_t api_save_led(httpd_req_t* req) {
   if (s_led_runtime) {
     s_led_runtime->update_config(s_cfg->led_engine);
   }
+  if (s_wled_fx_runtime) {
+    s_wled_fx_runtime->update_config(*s_cfg);
+  }
   httpd_resp_sendstr(req, "OK");
   return ESP_OK;
 }
@@ -433,6 +444,24 @@ static esp_err_t api_led_state_get(httpd_req_t* req) {
   httpd_resp_sendstr(req, txt);
   cJSON_free(txt);
   cJSON_Delete(root);
+  return ESP_OK;
+}
+
+static esp_err_t api_wled_effects_save(httpd_req_t* req) {
+  auto body = read_body(req);
+  if (body.empty()) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty payload");
+  }
+  if (config_apply_json(*s_cfg, body.c_str(), body.size()) != ESP_OK) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json");
+  }
+  if (config_save(*s_cfg) != ESP_OK) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "persist failed");
+  }
+  if (s_wled_fx_runtime) {
+    s_wled_fx_runtime->update_config(*s_cfg);
+  }
+  httpd_resp_sendstr(req, "OK");
   return ESP_OK;
 }
 
@@ -508,12 +537,13 @@ static esp_err_t api_ota(httpd_req_t* req) {
   return ESP_OK;
 }
 
-void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime){
+void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime, WledEffectsRuntime* wled_runtime){
   s_cfg = &cfg;
   s_led_runtime = runtime;
+  s_wled_fx_runtime = wled_runtime;
   httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
   server_config.uri_match_fn = httpd_uri_match_wildcard;
-  server_config.max_uri_handlers = 20;
+  server_config.max_uri_handlers = 24;
   httpd_handle_t server = nullptr;
   ESP_ERROR_CHECK(httpd_start(&server, &server_config));
 
@@ -548,6 +578,8 @@ void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime){
   httpd_register_uri_handler(server, &u_wled_add);
   httpd_uri_t u_wled_rescan = { .uri="/api/wled/rescan", .method=HTTP_POST, .handler=api_wled_rescan, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_wled_rescan);
+  httpd_uri_t u_wled_fx = { .uri="/api/wled/effects", .method=HTTP_POST, .handler=api_wled_effects_save, .user_ctx=NULL };
+  httpd_register_uri_handler(server, &u_wled_fx);
   httpd_uri_t u_led_pins = { .uri="/api/led/pins", .method=HTTP_GET, .handler=api_led_pins, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_led_pins);
   httpd_uri_t u_led_save = { .uri="/api/led/save", .method=HTTP_POST, .handler=api_save_led, .user_ctx=NULL };

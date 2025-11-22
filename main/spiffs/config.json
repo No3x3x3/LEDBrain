@@ -1,5 +1,5 @@
 {
-  "schema_version": 6,
+  "schema_version": 8,
   "lang": "pl",
   "autostart": false,
   "network": {
@@ -20,6 +20,10 @@
     "ddp_port": 4048
   },
   "wled_devices": [],
+  "wled_effects": {
+    "target_fps": 60,
+    "bindings": []
+  },
   "led_engine": {
     "driver": "esp_rmt",
     "max_fps": 120,

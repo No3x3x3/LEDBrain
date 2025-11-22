@@ -59,28 +59,35 @@
           <h2 id="overviewTitle">Device dashboard</h2>
           <p id="overviewSubtitle" class="muted">Status summary and quick actions.</p>
         </header>
-        <div class="lights-dashboard">
-          <section class="lights-group">
-            <div class="lights-group-header">
-              <h3 id="lightsGroupWled">WLED controllers</h3>
-              <span id="lightsGroupWledCount" class="muted">0</span>
+        <div class="device-explorer">
+          <article class="card device-list-card">
+            <header class="card-header">
+              <div>
+                <h3 id="deviceBrowserTitle">Devices</h3>
+                <p class="muted" id="deviceBrowserSubtitle">Pick a controller or segment to tweak effects.</p>
+              </div>
+              <div class="device-actions">
+                <button id="btnDeviceRescan" class="ghost small">Rescan</button>
+                <button id="btnDeviceAdd" class="ghost small">Add WLED</button>
+              </div>
+            </header>
+            <div id="deviceList" class="device-list">
+              <div class="placeholder muted" id="deviceListEmpty">No devices yet</div>
             </div>
-            <div class="lights-grid" id="lightsGridWled"></div>
-          </section>
-          <section class="lights-group">
-            <div class="lights-group-header">
-              <h3 id="lightsGroupPhysical">Physical outputs</h3>
-              <span id="lightsGroupPhysicalCount" class="muted">0</span>
+          </article>
+
+          <article class="card device-detail-card" id="deviceDetail">
+            <header class="card-header">
+              <div>
+                <h3 id="deviceDetailTitle">Device detail</h3>
+                <p class="muted" id="deviceDetailSubtitle">Status, capabilities and quick effect controls.</p>
+              </div>
+              <div class="pill ghost" id="deviceDetailType">-</div>
+            </header>
+            <div class="device-detail-body" id="deviceDetailBody">
+              <div class="placeholder muted" id="deviceDetailPlaceholder">Select something from the list.</div>
             </div>
-            <div class="lights-grid" id="lightsGridPhysical"></div>
-          </section>
-          <section class="lights-group">
-            <div class="lights-group-header">
-              <h3 id="lightsGroupVirtual">Virtual segments</h3>
-              <span id="lightsGroupVirtualCount" class="muted">0</span>
-            </div>
-            <div class="lights-grid" id="lightsGridVirtual"></div>
-          </section>
+          </article>
         </div>
         <div class="cards">
           <article class="card">
@@ -227,6 +234,8 @@
               <div>
                 <h3 id="effectsTitle">Effects & audio gain</h3>
                 <p class="muted" id="effectsSubtitle">Group segments and assign engines.</p>
+                <p class="muted small" id="effectsPipelineHint">LEDBrain renders effects locally and pushes frames; WLED panes act only as display outputs.</p>
+                <p class="muted small" id="effectsHintPick">Pick an effect name (e.g. Rain, Power+) from the list.</p>
               </div>
               <div class="inline-field">
                 <label for="defaultEffectEngine" id="lblDefaultEngine">Default engine</label>
@@ -290,6 +299,9 @@
                 </div>
               </header>
               <div class="form-grid slim fx-grid">
+                <label for="fxEffectPicker" id="lblFxEffectPicker">Preset/efekt</label>
+                <select id="fxEffectPicker"></select>
+                <div class="fx-effect-desc" id="fxEffectDescription">&nbsp;</div>
                 <label for="fxDirection" id="lblFxDirection">Kierunek</label>
                 <select id="fxDirection">
                   <option value="forward">Forward</option>

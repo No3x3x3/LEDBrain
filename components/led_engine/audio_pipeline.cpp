@@ -3,6 +3,7 @@
 
 static const char* TAG = "led-audio";
 static AudioDiagnostics g_diag{};
+static AudioMetrics g_metrics{};
 
 esp_err_t led_audio_apply_config(const AudioConfig& cfg) {
   g_diag.source = cfg.source;
@@ -24,4 +25,21 @@ esp_err_t led_audio_apply_config(const AudioConfig& cfg) {
 
 AudioDiagnostics led_audio_get_diagnostics() {
   return g_diag;
+}
+
+AudioMetrics led_audio_get_metrics() {
+  return g_metrics;
+}
+
+void led_audio_set_metrics(const AudioMetrics& metrics) {
+  g_metrics = metrics;
+  // Clamp to sane range
+  auto clamp01f = [](float v) { return v < 0.0f ? 0.0f : (v > 1.5f ? 1.5f : v); };
+  g_metrics.energy = clamp01f(g_metrics.energy);
+  g_metrics.energy_left = clamp01f(g_metrics.energy_left);
+  g_metrics.energy_right = clamp01f(g_metrics.energy_right);
+  g_metrics.bass = clamp01f(g_metrics.bass);
+  g_metrics.mid = clamp01f(g_metrics.mid);
+  g_metrics.treble = clamp01f(g_metrics.treble);
+  g_metrics.beat = clamp01f(g_metrics.beat);
 }

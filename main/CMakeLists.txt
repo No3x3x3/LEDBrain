@@ -9,6 +9,7 @@ idf_component_register(
       "ddp_tx.cpp"
       "heartbeat.cpp"
       "wled_discovery.cpp"
+      "wled_effects.cpp"
       "ota.cpp"
   INCLUDE_DIRS "."
   EMBED_FILES 
@@ -32,4 +33,5 @@ idf_component_register(
       esp_driver_gpio
       app_update
       led_engine
+      snapclient_light
 )

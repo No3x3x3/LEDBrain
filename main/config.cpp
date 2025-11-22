@@ -10,7 +10,7 @@
 static constexpr const char* TAG = "config";
 static constexpr const char* NVS_NAMESPACE = "appcfg";
 static constexpr const char* KEY_BLOB = "config";
-static constexpr uint32_t CURRENT_SCHEMA = 6;
+static constexpr uint32_t CURRENT_SCHEMA = 8;
 
 extern const uint8_t _binary_config_json_start[] asm("_binary_config_json_start");
 extern const uint8_t _binary_config_json_end[] asm("_binary_config_json_end");
@@ -19,6 +19,8 @@ namespace {
 
 void decode_led_engine(AppConfig& cfg, cJSON* root);
 void encode_led_engine(const AppConfig& cfg, cJSON* root);
+void decode_wled_effects(AppConfig& cfg, cJSON* root);
+void encode_wled_effects(const AppConfig& cfg, cJSON* root);
 
 void prune_legacy_defaults(AppConfig& cfg) {
   // Drop the old default "Biurko"/"Desk" segment that was bundled in config.json
@@ -49,6 +51,47 @@ void prune_effect_assignments(AppConfig& cfg) {
                 assigns.end());
 }
 
+void prune_wled_effect_bindings(AppConfig& cfg) {
+  if (cfg.wled_effects.bindings.empty()) {
+    return;
+  }
+  std::vector<std::string> valid_devices;
+  valid_devices.reserve(cfg.wled_devices.size());
+  for (const auto& dev : cfg.wled_devices) {
+    if (!dev.id.empty()) {
+      valid_devices.push_back(dev.id);
+    }
+  }
+  auto& bindings = cfg.wled_effects.bindings;
+  bindings.erase(std::remove_if(bindings.begin(), bindings.end(), [&](const WledEffectBinding& bind) {
+                   if (bind.device_id.empty()) {
+                     return true;
+                   }
+                   return std::find(valid_devices.begin(), valid_devices.end(), bind.device_id) == valid_devices.end();
+                 }),
+                 bindings.end());
+}
+
+void dedupe_wled_effects(AppConfig& cfg) {
+  if (cfg.wled_effects.bindings.empty()) {
+    return;
+  }
+  std::vector<WledEffectBinding> unique;
+  std::vector<std::string> keys;
+  for (const auto& bind : cfg.wled_effects.bindings) {
+    if (bind.device_id.empty()) {
+      continue;
+    }
+    const std::string key = bind.device_id + "#" + std::to_string(bind.segment_index);
+    if (std::find(keys.begin(), keys.end(), key) != keys.end()) {
+      continue;
+    }
+    keys.push_back(key);
+    unique.push_back(bind);
+  }
+  cfg.wled_effects.bindings.swap(unique);
+}
+
 void dedupe_wled_config(AppConfig& cfg) {
   if (cfg.wled_devices.empty()) {
     return;
@@ -76,11 +119,14 @@ void dedupe_wled_config(AppConfig& cfg) {
 }
 
 void decode_wled_devices(AppConfig& cfg, cJSON* root) {
-  cfg.wled_devices.clear();
   if (!root) {
     return;
   }
   cJSON* arr = cJSON_GetObjectItem(root, "wled_devices");
+  if (!arr) {
+    return;
+  }
+  cfg.wled_devices.clear();
   if (!cJSON_IsArray(arr)) {
     return;
   }
@@ -186,6 +232,7 @@ bool decode_json(AppConfig& cfg, const char* json, size_t len) {
   if (cJSON* led = cJSON_GetObjectItem(root, "led_engine"); cJSON_IsObject(led)) {
     decode_led_engine(cfg, led);
   }
+  decode_wled_effects(cfg, root);
 
   if (cJSON* schema = cJSON_GetObjectItem(root, "schema_version"); cJSON_IsNumber(schema)) {
     cfg.schema_version = static_cast<uint32_t>(schema->valuedouble);
@@ -194,6 +241,8 @@ bool decode_json(AppConfig& cfg, const char* json, size_t len) {
   prune_legacy_defaults(cfg);
   prune_effect_assignments(cfg);
   dedupe_wled_config(cfg);
+  prune_wled_effect_bindings(cfg);
+  dedupe_wled_effects(cfg);
 
   cJSON_Delete(root);
   return true;
@@ -223,6 +272,7 @@ std::string encode_json(const AppConfig& cfg) {
   cJSON_AddNumberToObject(mq, "ddp_port", cfg.mqtt.ddp_port);
 
   encode_wled_devices(cfg, root);
+  encode_wled_effects(cfg, root);
   encode_led_engine(cfg, root);
 
   char* txt = cJSON_PrintUnformatted(root);
@@ -578,6 +628,164 @@ void encode_audio_config(const AudioConfig& audio, cJSON* obj) {
   }
 }
 
+bool decode_effect_assignment(EffectAssignment& assign, cJSON* entry, bool allow_segment_id) {
+  if (!cJSON_IsObject(entry)) {
+    return false;
+  }
+  if (allow_segment_id) {
+    if (cJSON* seg = cJSON_GetObjectItem(entry, "segment_id"); cJSON_IsString(seg)) {
+      assign.segment_id = seg->valuestring;
+    }
+  }
+  if (cJSON* engine = cJSON_GetObjectItem(entry, "engine"); cJSON_IsString(engine)) {
+    assign.engine = engine->valuestring;
+  }
+  if (cJSON* effect = cJSON_GetObjectItem(entry, "effect"); cJSON_IsString(effect)) {
+    assign.effect = effect->valuestring;
+  }
+  if (cJSON* preset = cJSON_GetObjectItem(entry, "preset"); cJSON_IsString(preset)) {
+    assign.preset = preset->valuestring;
+  }
+  if (cJSON* audio = cJSON_GetObjectItem(entry, "audio_link"); cJSON_IsBool(audio)) {
+    assign.audio_link = cJSON_IsTrue(audio);
+  }
+  if (cJSON* profile = cJSON_GetObjectItem(entry, "audio_profile"); cJSON_IsString(profile)) {
+    assign.audio_profile = profile->valuestring;
+  }
+  if (cJSON* bri = cJSON_GetObjectItem(entry, "brightness"); cJSON_IsNumber(bri)) {
+    int value = static_cast<int>(bri->valuedouble);
+    assign.brightness = static_cast<uint8_t>(std::clamp(value, 0, 255));
+  }
+  if (cJSON* inten = cJSON_GetObjectItem(entry, "intensity"); cJSON_IsNumber(inten)) {
+    int value = static_cast<int>(inten->valuedouble);
+    assign.intensity = static_cast<uint8_t>(std::clamp(value, 0, 255));
+  }
+  if (cJSON* spd = cJSON_GetObjectItem(entry, "speed"); cJSON_IsNumber(spd)) {
+    int value = static_cast<int>(spd->valuedouble);
+    assign.speed = static_cast<uint8_t>(std::clamp(value, 0, 255));
+  }
+  if (cJSON* mode = cJSON_GetObjectItem(entry, "audio_mode"); cJSON_IsString(mode)) {
+    assign.audio_mode = mode->valuestring;
+  }
+  if (cJSON* dir = cJSON_GetObjectItem(entry, "direction"); cJSON_IsString(dir)) {
+    assign.direction = dir->valuestring;
+  }
+  if (cJSON* scatter = cJSON_GetObjectItem(entry, "scatter"); cJSON_IsNumber(scatter)) {
+    assign.scatter = static_cast<float>(scatter->valuedouble);
+  }
+  if (cJSON* fade_in = cJSON_GetObjectItem(entry, "fade_in"); cJSON_IsNumber(fade_in)) {
+    assign.fade_in = static_cast<uint16_t>(std::max(0, static_cast<int>(fade_in->valuedouble)));
+  }
+  if (cJSON* fade_out = cJSON_GetObjectItem(entry, "fade_out"); cJSON_IsNumber(fade_out)) {
+    assign.fade_out = static_cast<uint16_t>(std::max(0, static_cast<int>(fade_out->valuedouble)));
+  }
+  if (cJSON* c1 = cJSON_GetObjectItem(entry, "color1"); cJSON_IsString(c1)) assign.color1 = c1->valuestring;
+  if (cJSON* c2 = cJSON_GetObjectItem(entry, "color2"); cJSON_IsString(c2)) assign.color2 = c2->valuestring;
+  if (cJSON* c3 = cJSON_GetObjectItem(entry, "color3"); cJSON_IsString(c3)) assign.color3 = c3->valuestring;
+  if (cJSON* pal = cJSON_GetObjectItem(entry, "palette"); cJSON_IsString(pal)) assign.palette = pal->valuestring;
+  if (cJSON* grad = cJSON_GetObjectItem(entry, "gradient"); cJSON_IsString(grad)) assign.gradient = grad->valuestring;
+  if (cJSON* bri_o = cJSON_GetObjectItem(entry, "brightness_override"); cJSON_IsNumber(bri_o)) {
+    int value = static_cast<int>(bri_o->valuedouble);
+    assign.brightness_override = static_cast<uint8_t>(std::clamp(value, 0, 255));
+  }
+  if (cJSON* gcol = cJSON_GetObjectItem(entry, "gamma_color"); cJSON_IsNumber(gcol)) {
+    assign.gamma_color = static_cast<float>(gcol->valuedouble);
+  }
+  if (cJSON* gbr = cJSON_GetObjectItem(entry, "gamma_brightness"); cJSON_IsNumber(gbr)) {
+    assign.gamma_brightness = static_cast<float>(gbr->valuedouble);
+  }
+  if (cJSON* blend = cJSON_GetObjectItem(entry, "blend_mode"); cJSON_IsString(blend)) {
+    assign.blend_mode = blend->valuestring;
+  }
+  if (cJSON* layers = cJSON_GetObjectItem(entry, "layers"); cJSON_IsNumber(layers)) {
+    int value = static_cast<int>(layers->valuedouble);
+    assign.layers = static_cast<uint8_t>(std::clamp(value, 1, 8));
+  }
+  if (cJSON* reactive = cJSON_GetObjectItem(entry, "reactive_mode"); cJSON_IsString(reactive)) {
+    assign.reactive_mode = reactive->valuestring;
+  }
+  if (cJSON* low = cJSON_GetObjectItem(entry, "band_gain_low"); cJSON_IsNumber(low)) {
+    assign.band_gain_low = static_cast<float>(low->valuedouble);
+  }
+  if (cJSON* mid = cJSON_GetObjectItem(entry, "band_gain_mid"); cJSON_IsNumber(mid)) {
+    assign.band_gain_mid = static_cast<float>(mid->valuedouble);
+  }
+  if (cJSON* high = cJSON_GetObjectItem(entry, "band_gain_high"); cJSON_IsNumber(high)) {
+    assign.band_gain_high = static_cast<float>(high->valuedouble);
+  }
+  if (cJSON* amp = cJSON_GetObjectItem(entry, "amplitude_scale"); cJSON_IsNumber(amp)) {
+    assign.amplitude_scale = static_cast<float>(amp->valuedouble);
+  }
+  if (cJSON* comp = cJSON_GetObjectItem(entry, "brightness_compress"); cJSON_IsNumber(comp)) {
+    assign.brightness_compress = static_cast<float>(comp->valuedouble);
+  }
+  if (cJSON* beat = cJSON_GetObjectItem(entry, "beat_response"); cJSON_IsBool(beat)) {
+    assign.beat_response = cJSON_IsTrue(beat);
+  }
+  if (cJSON* attack = cJSON_GetObjectItem(entry, "attack_ms"); cJSON_IsNumber(attack)) {
+    assign.attack_ms = static_cast<uint16_t>(std::max(0, static_cast<int>(attack->valuedouble)));
+  }
+  if (cJSON* release = cJSON_GetObjectItem(entry, "release_ms"); cJSON_IsNumber(release)) {
+    assign.release_ms = static_cast<uint16_t>(std::max(0, static_cast<int>(release->valuedouble)));
+  }
+  if (cJSON* scene = cJSON_GetObjectItem(entry, "scene_preset"); cJSON_IsString(scene)) {
+    assign.scene_preset = scene->valuestring;
+  }
+  if (cJSON* sched = cJSON_GetObjectItem(entry, "scene_schedule"); cJSON_IsString(sched)) {
+    assign.scene_schedule = sched->valuestring;
+  }
+  if (cJSON* shuffle = cJSON_GetObjectItem(entry, "beat_shuffle"); cJSON_IsBool(shuffle)) {
+    assign.beat_shuffle = cJSON_IsTrue(shuffle);
+  }
+  return true;
+}
+
+cJSON* encode_effect_assignment(const EffectAssignment& assign, bool include_segment_id) {
+  cJSON* a = cJSON_CreateObject();
+  if (!a) {
+    return nullptr;
+  }
+  if (include_segment_id) {
+    cJSON_AddStringToObject(a, "segment_id", assign.segment_id.c_str());
+  }
+  cJSON_AddStringToObject(a, "engine", assign.engine.c_str());
+  cJSON_AddStringToObject(a, "effect", assign.effect.c_str());
+  cJSON_AddStringToObject(a, "preset", assign.preset.c_str());
+  cJSON_AddBoolToObject(a, "audio_link", assign.audio_link);
+  cJSON_AddStringToObject(a, "audio_profile", assign.audio_profile.c_str());
+  cJSON_AddNumberToObject(a, "brightness", assign.brightness);
+  cJSON_AddNumberToObject(a, "intensity", assign.intensity);
+  cJSON_AddNumberToObject(a, "speed", assign.speed);
+  cJSON_AddStringToObject(a, "audio_mode", assign.audio_mode.c_str());
+  cJSON_AddStringToObject(a, "direction", assign.direction.c_str());
+  cJSON_AddNumberToObject(a, "scatter", assign.scatter);
+  cJSON_AddNumberToObject(a, "fade_in", assign.fade_in);
+  cJSON_AddNumberToObject(a, "fade_out", assign.fade_out);
+  cJSON_AddStringToObject(a, "color1", assign.color1.c_str());
+  cJSON_AddStringToObject(a, "color2", assign.color2.c_str());
+  cJSON_AddStringToObject(a, "color3", assign.color3.c_str());
+  cJSON_AddStringToObject(a, "palette", assign.palette.c_str());
+  cJSON_AddStringToObject(a, "gradient", assign.gradient.c_str());
+  cJSON_AddNumberToObject(a, "brightness_override", assign.brightness_override);
+  cJSON_AddNumberToObject(a, "gamma_color", assign.gamma_color);
+  cJSON_AddNumberToObject(a, "gamma_brightness", assign.gamma_brightness);
+  cJSON_AddStringToObject(a, "blend_mode", assign.blend_mode.c_str());
+  cJSON_AddNumberToObject(a, "layers", assign.layers);
+  cJSON_AddStringToObject(a, "reactive_mode", assign.reactive_mode.c_str());
+  cJSON_AddNumberToObject(a, "band_gain_low", assign.band_gain_low);
+  cJSON_AddNumberToObject(a, "band_gain_mid", assign.band_gain_mid);
+  cJSON_AddNumberToObject(a, "band_gain_high", assign.band_gain_high);
+  cJSON_AddNumberToObject(a, "amplitude_scale", assign.amplitude_scale);
+  cJSON_AddNumberToObject(a, "brightness_compress", assign.brightness_compress);
+  cJSON_AddBoolToObject(a, "beat_response", assign.beat_response);
+  cJSON_AddNumberToObject(a, "attack_ms", assign.attack_ms);
+  cJSON_AddNumberToObject(a, "release_ms", assign.release_ms);
+  cJSON_AddStringToObject(a, "scene_preset", assign.scene_preset.c_str());
+  cJSON_AddStringToObject(a, "scene_schedule", assign.scene_schedule.c_str());
+  cJSON_AddBoolToObject(a, "beat_shuffle", assign.beat_shuffle);
+  return a;
+}
+
 void decode_effects(EffectsConfig& effects, cJSON* obj) {
   if (!cJSON_IsObject(obj)) {
     return;
@@ -589,114 +797,10 @@ void decode_effects(EffectsConfig& effects, cJSON* obj) {
   if (cJSON* arr = cJSON_GetObjectItem(obj, "assignments"); cJSON_IsArray(arr)) {
     cJSON* entry = nullptr;
     cJSON_ArrayForEach(entry, arr) {
-      if (!cJSON_IsObject(entry)) {
-        continue;
-      }
       EffectAssignment assign{};
-      if (cJSON* seg = cJSON_GetObjectItem(entry, "segment_id"); cJSON_IsString(seg)) {
-        assign.segment_id = seg->valuestring;
+      if (decode_effect_assignment(assign, entry, true)) {
+        effects.assignments.push_back(std::move(assign));
       }
-      if (cJSON* engine = cJSON_GetObjectItem(entry, "engine"); cJSON_IsString(engine)) {
-        assign.engine = engine->valuestring;
-      }
-      if (cJSON* effect = cJSON_GetObjectItem(entry, "effect"); cJSON_IsString(effect)) {
-        assign.effect = effect->valuestring;
-      }
-      if (cJSON* preset = cJSON_GetObjectItem(entry, "preset"); cJSON_IsString(preset)) {
-        assign.preset = preset->valuestring;
-      }
-      if (cJSON* audio = cJSON_GetObjectItem(entry, "audio_link"); cJSON_IsBool(audio)) {
-        assign.audio_link = cJSON_IsTrue(audio);
-      }
-      if (cJSON* profile = cJSON_GetObjectItem(entry, "audio_profile"); cJSON_IsString(profile)) {
-        assign.audio_profile = profile->valuestring;
-      }
-      if (cJSON* bri = cJSON_GetObjectItem(entry, "brightness"); cJSON_IsNumber(bri)) {
-        int value = static_cast<int>(bri->valuedouble);
-        assign.brightness = static_cast<uint8_t>(std::clamp(value, 0, 255));
-      }
-      if (cJSON* inten = cJSON_GetObjectItem(entry, "intensity"); cJSON_IsNumber(inten)) {
-        int value = static_cast<int>(inten->valuedouble);
-        assign.intensity = static_cast<uint8_t>(std::clamp(value, 0, 255));
-      }
-      if (cJSON* spd = cJSON_GetObjectItem(entry, "speed"); cJSON_IsNumber(spd)) {
-        int value = static_cast<int>(spd->valuedouble);
-        assign.speed = static_cast<uint8_t>(std::clamp(value, 0, 255));
-      }
-      if (cJSON* mode = cJSON_GetObjectItem(entry, "audio_mode"); cJSON_IsString(mode)) {
-        assign.audio_mode = mode->valuestring;
-      }
-      if (cJSON* dir = cJSON_GetObjectItem(entry, "direction"); cJSON_IsString(dir)) {
-        assign.direction = dir->valuestring;
-      }
-      if (cJSON* scatter = cJSON_GetObjectItem(entry, "scatter"); cJSON_IsNumber(scatter)) {
-        assign.scatter = static_cast<float>(scatter->valuedouble);
-      }
-      if (cJSON* fade_in = cJSON_GetObjectItem(entry, "fade_in"); cJSON_IsNumber(fade_in)) {
-        assign.fade_in = static_cast<uint16_t>(std::max(0, static_cast<int>(fade_in->valuedouble)));
-      }
-      if (cJSON* fade_out = cJSON_GetObjectItem(entry, "fade_out"); cJSON_IsNumber(fade_out)) {
-        assign.fade_out = static_cast<uint16_t>(std::max(0, static_cast<int>(fade_out->valuedouble)));
-      }
-      if (cJSON* c1 = cJSON_GetObjectItem(entry, "color1"); cJSON_IsString(c1)) assign.color1 = c1->valuestring;
-      if (cJSON* c2 = cJSON_GetObjectItem(entry, "color2"); cJSON_IsString(c2)) assign.color2 = c2->valuestring;
-      if (cJSON* c3 = cJSON_GetObjectItem(entry, "color3"); cJSON_IsString(c3)) assign.color3 = c3->valuestring;
-      if (cJSON* pal = cJSON_GetObjectItem(entry, "palette"); cJSON_IsString(pal)) assign.palette = pal->valuestring;
-      if (cJSON* grad = cJSON_GetObjectItem(entry, "gradient"); cJSON_IsString(grad)) assign.gradient = grad->valuestring;
-      if (cJSON* bri_o = cJSON_GetObjectItem(entry, "brightness_override"); cJSON_IsNumber(bri_o)) {
-        int value = static_cast<int>(bri_o->valuedouble);
-        assign.brightness_override = static_cast<uint8_t>(std::clamp(value, 0, 255));
-      }
-      if (cJSON* gcol = cJSON_GetObjectItem(entry, "gamma_color"); cJSON_IsNumber(gcol)) {
-        assign.gamma_color = static_cast<float>(gcol->valuedouble);
-      }
-      if (cJSON* gbr = cJSON_GetObjectItem(entry, "gamma_brightness"); cJSON_IsNumber(gbr)) {
-        assign.gamma_brightness = static_cast<float>(gbr->valuedouble);
-      }
-      if (cJSON* blend = cJSON_GetObjectItem(entry, "blend_mode"); cJSON_IsString(blend)) {
-        assign.blend_mode = blend->valuestring;
-      }
-      if (cJSON* layers = cJSON_GetObjectItem(entry, "layers"); cJSON_IsNumber(layers)) {
-        int value = static_cast<int>(layers->valuedouble);
-        assign.layers = static_cast<uint8_t>(std::clamp(value, 1, 8));
-      }
-      if (cJSON* reactive = cJSON_GetObjectItem(entry, "reactive_mode"); cJSON_IsString(reactive)) {
-        assign.reactive_mode = reactive->valuestring;
-      }
-      if (cJSON* low = cJSON_GetObjectItem(entry, "band_gain_low"); cJSON_IsNumber(low)) {
-        assign.band_gain_low = static_cast<float>(low->valuedouble);
-      }
-      if (cJSON* mid = cJSON_GetObjectItem(entry, "band_gain_mid"); cJSON_IsNumber(mid)) {
-        assign.band_gain_mid = static_cast<float>(mid->valuedouble);
-      }
-      if (cJSON* high = cJSON_GetObjectItem(entry, "band_gain_high"); cJSON_IsNumber(high)) {
-        assign.band_gain_high = static_cast<float>(high->valuedouble);
-      }
-      if (cJSON* amp = cJSON_GetObjectItem(entry, "amplitude_scale"); cJSON_IsNumber(amp)) {
-        assign.amplitude_scale = static_cast<float>(amp->valuedouble);
-      }
-      if (cJSON* comp = cJSON_GetObjectItem(entry, "brightness_compress"); cJSON_IsNumber(comp)) {
-        assign.brightness_compress = static_cast<float>(comp->valuedouble);
-      }
-      if (cJSON* beat = cJSON_GetObjectItem(entry, "beat_response"); cJSON_IsBool(beat)) {
-        assign.beat_response = cJSON_IsTrue(beat);
-      }
-      if (cJSON* attack = cJSON_GetObjectItem(entry, "attack_ms"); cJSON_IsNumber(attack)) {
-        assign.attack_ms = static_cast<uint16_t>(std::max(0, static_cast<int>(attack->valuedouble)));
-      }
-      if (cJSON* release = cJSON_GetObjectItem(entry, "release_ms"); cJSON_IsNumber(release)) {
-        assign.release_ms = static_cast<uint16_t>(std::max(0, static_cast<int>(release->valuedouble)));
-      }
-      if (cJSON* scene = cJSON_GetObjectItem(entry, "scene_preset"); cJSON_IsString(scene)) {
-        assign.scene_preset = scene->valuestring;
-      }
-      if (cJSON* sched = cJSON_GetObjectItem(entry, "scene_schedule"); cJSON_IsString(sched)) {
-        assign.scene_schedule = sched->valuestring;
-      }
-      if (cJSON* shuffle = cJSON_GetObjectItem(entry, "beat_shuffle"); cJSON_IsBool(shuffle)) {
-        assign.beat_shuffle = cJSON_IsTrue(shuffle);
-      }
-      effects.assignments.push_back(std::move(assign));
     }
   }
 }
@@ -711,47 +815,92 @@ void encode_effects(const EffectsConfig& effects, cJSON* obj) {
     return;
   }
   for (const auto& assign : effects.assignments) {
-    cJSON* a = cJSON_CreateObject();
-    if (!a) {
+    cJSON* a = encode_effect_assignment(assign, true);
+    if (a) {
+      cJSON_AddItemToArray(arr, a);
+    }
+  }
+}
+
+void decode_wled_effects(AppConfig& cfg, cJSON* root) {
+  if (!root) {
+    return;
+  }
+  cJSON* obj = cJSON_GetObjectItem(root, "wled_effects");
+  if (!cJSON_IsObject(obj)) {
+    return;
+  }
+  if (cJSON* fps = cJSON_GetObjectItem(obj, "target_fps"); cJSON_IsNumber(fps)) {
+    int value = static_cast<int>(fps->valuedouble);
+    cfg.wled_effects.target_fps = static_cast<uint16_t>(std::clamp(value, 1, 240));
+  }
+  if (cJSON* arr = cJSON_GetObjectItem(obj, "bindings"); cJSON_IsArray(arr)) {
+    cfg.wled_effects.bindings.clear();
+    cJSON* entry = nullptr;
+    cJSON_ArrayForEach(entry, arr) {
+      if (!cJSON_IsObject(entry)) {
+        continue;
+      }
+      WledEffectBinding bind{};
+      if (cJSON* id = cJSON_GetObjectItem(entry, "device_id"); cJSON_IsString(id)) {
+        bind.device_id = id->valuestring;
+      }
+      if (cJSON* seg = cJSON_GetObjectItem(entry, "segment_index"); cJSON_IsNumber(seg)) {
+        bind.segment_index = static_cast<uint16_t>(std::max(0, static_cast<int>(seg->valuedouble)));
+      } else if (cJSON* seg_alt = cJSON_GetObjectItem(entry, "segment"); cJSON_IsNumber(seg_alt)) {
+        bind.segment_index = static_cast<uint16_t>(std::max(0, static_cast<int>(seg_alt->valuedouble)));
+      }
+      if (cJSON* ena = cJSON_GetObjectItem(entry, "enabled"); cJSON_IsBool(ena)) {
+        bind.enabled = cJSON_IsTrue(ena);
+      }
+      if (cJSON* ddp = cJSON_GetObjectItem(entry, "ddp"); cJSON_IsBool(ddp)) {
+        bind.ddp = cJSON_IsTrue(ddp);
+      }
+      if (cJSON* ch = cJSON_GetObjectItem(entry, "audio_channel"); cJSON_IsString(ch)) {
+        bind.audio_channel = ch->valuestring;
+      }
+      if (cJSON* fx = cJSON_GetObjectItem(entry, "effect")) {
+        decode_effect_assignment(bind.effect, fx, false);
+      } else {
+        decode_effect_assignment(bind.effect, entry, false);
+      }
+      if (!bind.device_id.empty()) {
+        cfg.wled_effects.bindings.push_back(std::move(bind));
+      }
+    }
+  }
+  if (cfg.wled_effects.target_fps == 0) {
+    cfg.wled_effects.target_fps = 60;
+  }
+}
+
+void encode_wled_effects(const AppConfig& cfg, cJSON* root) {
+  if (!root) {
+    return;
+  }
+  cJSON* obj = cJSON_AddObjectToObject(root, "wled_effects");
+  if (!obj) {
+    return;
+  }
+  cJSON_AddNumberToObject(obj, "target_fps", cfg.wled_effects.target_fps);
+  cJSON* arr = cJSON_AddArrayToObject(obj, "bindings");
+  if (!arr) {
+    return;
+  }
+  for (const auto& bind : cfg.wled_effects.bindings) {
+    cJSON* b = cJSON_CreateObject();
+    if (!b) {
       continue;
     }
-    cJSON_AddStringToObject(a, "segment_id", assign.segment_id.c_str());
-    cJSON_AddStringToObject(a, "engine", assign.engine.c_str());
-    cJSON_AddStringToObject(a, "effect", assign.effect.c_str());
-    cJSON_AddStringToObject(a, "preset", assign.preset.c_str());
-    cJSON_AddBoolToObject(a, "audio_link", assign.audio_link);
-    cJSON_AddStringToObject(a, "audio_profile", assign.audio_profile.c_str());
-    cJSON_AddNumberToObject(a, "brightness", assign.brightness);
-    cJSON_AddNumberToObject(a, "intensity", assign.intensity);
-    cJSON_AddNumberToObject(a, "speed", assign.speed);
-    cJSON_AddStringToObject(a, "audio_mode", assign.audio_mode.c_str());
-    cJSON_AddStringToObject(a, "direction", assign.direction.c_str());
-    cJSON_AddNumberToObject(a, "scatter", assign.scatter);
-    cJSON_AddNumberToObject(a, "fade_in", assign.fade_in);
-    cJSON_AddNumberToObject(a, "fade_out", assign.fade_out);
-    cJSON_AddStringToObject(a, "color1", assign.color1.c_str());
-    cJSON_AddStringToObject(a, "color2", assign.color2.c_str());
-    cJSON_AddStringToObject(a, "color3", assign.color3.c_str());
-    cJSON_AddStringToObject(a, "palette", assign.palette.c_str());
-    cJSON_AddStringToObject(a, "gradient", assign.gradient.c_str());
-    cJSON_AddNumberToObject(a, "brightness_override", assign.brightness_override);
-    cJSON_AddNumberToObject(a, "gamma_color", assign.gamma_color);
-    cJSON_AddNumberToObject(a, "gamma_brightness", assign.gamma_brightness);
-    cJSON_AddStringToObject(a, "blend_mode", assign.blend_mode.c_str());
-    cJSON_AddNumberToObject(a, "layers", assign.layers);
-    cJSON_AddStringToObject(a, "reactive_mode", assign.reactive_mode.c_str());
-    cJSON_AddNumberToObject(a, "band_gain_low", assign.band_gain_low);
-    cJSON_AddNumberToObject(a, "band_gain_mid", assign.band_gain_mid);
-    cJSON_AddNumberToObject(a, "band_gain_high", assign.band_gain_high);
-    cJSON_AddNumberToObject(a, "amplitude_scale", assign.amplitude_scale);
-    cJSON_AddNumberToObject(a, "brightness_compress", assign.brightness_compress);
-    cJSON_AddBoolToObject(a, "beat_response", assign.beat_response);
-    cJSON_AddNumberToObject(a, "attack_ms", assign.attack_ms);
-    cJSON_AddNumberToObject(a, "release_ms", assign.release_ms);
-    cJSON_AddStringToObject(a, "scene_preset", assign.scene_preset.c_str());
-    cJSON_AddStringToObject(a, "scene_schedule", assign.scene_schedule.c_str());
-    cJSON_AddBoolToObject(a, "beat_shuffle", assign.beat_shuffle);
-    cJSON_AddItemToArray(arr, a);
+    cJSON_AddStringToObject(b, "device_id", bind.device_id.c_str());
+    cJSON_AddNumberToObject(b, "segment_index", bind.segment_index);
+    cJSON_AddBoolToObject(b, "enabled", bind.enabled);
+    cJSON_AddBoolToObject(b, "ddp", bind.ddp);
+    cJSON_AddStringToObject(b, "audio_channel", bind.audio_channel.c_str());
+    if (cJSON* fx = encode_effect_assignment(bind.effect, false)) {
+      cJSON_AddItemToObject(b, "effect", fx);
+    }
+    cJSON_AddItemToArray(arr, b);
   }
 }
 

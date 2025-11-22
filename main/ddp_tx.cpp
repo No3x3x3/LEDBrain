@@ -3,10 +3,10 @@
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include <cmath>
+#include <unistd.h>
 #include <cstring>
 #include <string>
 #include <vector>
-#include <unistd.h>
 
 static const char* TAG = "ddp";
 
@@ -22,13 +22,15 @@ struct DDPHeader {
 };
 #pragma pack(pop)
 
-// ------------------------------------------------------------
-// Send test DDP frame (simple rainbow animation)
-// ------------------------------------------------------------
-bool ddp_send_test(const std::string& host, uint16_t port, uint16_t pixels)
-{
-    if (pixels == 0) pixels = 120;  // default
+namespace {
 
+bool ddp_send_frame_internal(const std::string& host,
+                             uint16_t port,
+                             const uint8_t* payload,
+                             size_t bytes,
+                             uint32_t channel,
+                             uint32_t data_offset,
+                             uint8_t seq) {
     // --- resolve hostname ---
     struct addrinfo hints = {};
     hints.ai_family = AF_INET;
@@ -51,34 +53,20 @@ bool ddp_send_test(const std::string& host, uint16_t port, uint16_t pixels)
         return false;
     }
 
-    // --- prepare DDP packet ---
-    const int bytes = pixels * 3;
     std::vector<uint8_t> buf(sizeof(DDPHeader) + bytes);
     auto* h = reinterpret_cast<DDPHeader*>(buf.data());
     h->flags = 0x41;
-    static uint8_t seq = 0;
-    h->seq = seq++;
+    h->seq = seq;
     h->data_type = htons(0x0000);
-    h->channel = htonl(1);
-    h->data_offset = htonl(0);
-    h->data_len = htons(bytes);
+    h->channel = htonl(channel);
+    h->data_offset = htonl(data_offset);
+    h->data_len = htons(static_cast<uint16_t>(bytes));
     h->unused = 0;
 
-    // --- generate rainbow animation ---
-    static float t = 0.0f;
-    t += 0.05f;
-    uint8_t* p = buf.data() + sizeof(DDPHeader);
-    for (int i = 0; i < pixels; i++) {
-        float x = (i / (float)pixels) * 6.2831f + t;
-        uint8_t r = (uint8_t)((sinf(x) * 0.5f + 0.5f) * 255);
-        uint8_t g = (uint8_t)((sinf(x + 2.094f) * 0.5f + 0.5f) * 255);
-        uint8_t b = (uint8_t)((sinf(x + 4.188f) * 0.5f + 0.5f) * 255);
-        *p++ = r;
-        *p++ = g;
-        *p++ = b;
+    if (bytes > 0 && payload) {
+        memcpy(buf.data() + sizeof(DDPHeader), payload, bytes);
     }
 
-    // --- send frame ---
     int sent = sendto(sock, buf.data(), buf.size(), 0, res->ai_addr, res->ai_addrlen);
     if (sent < 0) {
         ESP_LOGE(TAG, "DDP send error -> %s:%u", host.c_str(), port);
@@ -89,8 +77,50 @@ bool ddp_send_test(const std::string& host, uint16_t port, uint16_t pixels)
 
     close(sock);
     freeaddrinfo(res);
-    ESP_LOGI(TAG, "DDP frame sent (%d bytes) -> %s:%d", sent, host.c_str(), port);
-    return sent == (int)buf.size();
+    return sent == static_cast<int>(buf.size());
+}
+
+}  // namespace
+
+bool ddp_send_frame(const std::string& host,
+                    uint16_t port,
+                    const std::vector<uint8_t>& payload,
+                    uint32_t channel,
+                    uint32_t data_offset,
+                    uint8_t seq) {
+    return ddp_send_frame_internal(host, port, payload.data(), payload.size(), channel, data_offset, seq);
+}
+
+// ------------------------------------------------------------
+// Send test DDP frame (simple rainbow animation)
+// ------------------------------------------------------------
+bool ddp_send_test(const std::string& host, uint16_t port, uint16_t pixels)
+{
+    if (pixels == 0) pixels = 120;  // default
+
+    const int bytes = pixels * 3;
+    std::vector<uint8_t> buf(bytes);
+
+    // --- generate rainbow animation ---
+    static float t = 0.0f;
+    t += 0.05f;
+    uint8_t* p = buf.data();
+    for (int i = 0; i < pixels; i++) {
+        float x = (i / (float)pixels) * 6.2831f + t;
+        uint8_t r = (uint8_t)((sinf(x) * 0.5f + 0.5f) * 255);
+        uint8_t g = (uint8_t)((sinf(x + 2.094f) * 0.5f + 0.5f) * 255);
+        uint8_t b = (uint8_t)((sinf(x + 4.188f) * 0.5f + 0.5f) * 255);
+        *p++ = r;
+        *p++ = g;
+        *p++ = b;
+    }
+
+    static uint8_t seq = 0;
+    bool ok = ddp_send_frame_internal(host, port, buf.data(), buf.size(), 1, 0, seq++);
+    if (ok) {
+      ESP_LOGI(TAG, "DDP frame sent (%u bytes) -> %s:%u", static_cast<unsigned>(buf.size()), host.c_str(), port);
+    }
+    return ok;
 }
 
 void ddp_tx_init(const MqttConfig& cfg) {
