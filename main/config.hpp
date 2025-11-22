@@ -54,6 +54,7 @@ struct AppConfig {
   bool autostart{false};
   std::vector<WledDeviceConfig> wled_devices{};
   WledEffectsConfig wled_effects{};
+  std::vector<VirtualSegmentConfig> virtual_segments{};
   LedHardwareConfig led_engine{};
   uint32_t schema_version{8};
 };

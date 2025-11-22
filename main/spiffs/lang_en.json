@@ -174,6 +174,7 @@
   "col_fx_smoothing": "Smoothing",
   "led_fx_empty": "Add a segment first to map effects",
   "btn_save_led": "Save LED config",
+  "btn_save_audio": "Save audio config",
   "pin_select": "Select pin",
   "toast_led_saved": "LED configuration saved",
   "toast_led_failed": "Failed to save LED config",
@@ -313,5 +314,7 @@
   "audio_left": "Left",
   "audio_right": "Right",
   "colFxAudioLink": "Audio link",
-  "colFxAudioProfile": "Audio profile"
+  "colFxAudioProfile": "Audio profile",
+  "btn_save_audio": "Save audio config",
+  "btn_save_global": "Save"
 }

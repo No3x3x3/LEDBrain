@@ -21,6 +21,8 @@ void decode_led_engine(AppConfig& cfg, cJSON* root);
 void encode_led_engine(const AppConfig& cfg, cJSON* root);
 void decode_wled_effects(AppConfig& cfg, cJSON* root);
 void encode_wled_effects(const AppConfig& cfg, cJSON* root);
+void decode_virtual_segments(AppConfig& cfg, cJSON* root);
+void encode_virtual_segments(const AppConfig& cfg, cJSON* root);
 
 void prune_legacy_defaults(AppConfig& cfg) {
   // Drop the old default "Biurko"/"Desk" segment that was bundled in config.json
@@ -233,6 +235,7 @@ bool decode_json(AppConfig& cfg, const char* json, size_t len) {
     decode_led_engine(cfg, led);
   }
   decode_wled_effects(cfg, root);
+  decode_virtual_segments(cfg, root);
 
   if (cJSON* schema = cJSON_GetObjectItem(root, "schema_version"); cJSON_IsNumber(schema)) {
     cfg.schema_version = static_cast<uint32_t>(schema->valuedouble);
@@ -273,6 +276,7 @@ std::string encode_json(const AppConfig& cfg) {
 
   encode_wled_devices(cfg, root);
   encode_wled_effects(cfg, root);
+  encode_virtual_segments(cfg, root);
   encode_led_engine(cfg, root);
 
   char* txt = cJSON_PrintUnformatted(root);
@@ -930,6 +934,79 @@ void encode_led_engine(const AppConfig& cfg, cJSON* root) {
   cJSON* effects = cJSON_AddObjectToObject(engine, "effects");
   if (effects) {
     encode_effects(cfg.led_engine.effects, effects);
+  }
+}
+
+void decode_virtual_segments(AppConfig& cfg, cJSON* root) {
+  if (!root) return;
+  cJSON* arr = cJSON_GetObjectItem(root, "virtual_segments");
+  if (!cJSON_IsArray(arr)) {
+    return;
+  }
+  cfg.virtual_segments.clear();
+  cJSON* entry = nullptr;
+  cJSON_ArrayForEach(entry, arr) {
+    if (!cJSON_IsObject(entry)) continue;
+    VirtualSegmentConfig seg{};
+    if (cJSON* id = cJSON_GetObjectItem(entry, "id"); cJSON_IsString(id)) seg.id = id->valuestring;
+    if (cJSON* name = cJSON_GetObjectItem(entry, "name"); cJSON_IsString(name)) seg.name = name->valuestring;
+    if (cJSON* enabled = cJSON_GetObjectItem(entry, "enabled"); cJSON_IsBool(enabled)) seg.enabled = cJSON_IsTrue(enabled);
+    if (cJSON* fx = cJSON_GetObjectItem(entry, "effect")) {
+      decode_effect_assignment(seg.effect, fx, false);
+    }
+    if (cJSON* members = cJSON_GetObjectItem(entry, "members"); cJSON_IsArray(members)) {
+      cJSON* m = nullptr;
+      cJSON_ArrayForEach(m, members) {
+        if (!cJSON_IsObject(m)) continue;
+        VirtualSegmentMember mem{};
+        if (cJSON* type = cJSON_GetObjectItem(m, "type"); cJSON_IsString(type)) mem.type = type->valuestring;
+        if (cJSON* ref = cJSON_GetObjectItem(m, "id"); cJSON_IsString(ref)) mem.id = ref->valuestring;
+        if (cJSON* seg_idx = cJSON_GetObjectItem(m, "segment_index"); cJSON_IsNumber(seg_idx)) {
+          mem.segment_index = static_cast<uint16_t>(std::max(0, static_cast<int>(seg_idx->valuedouble)));
+        }
+        if (cJSON* start = cJSON_GetObjectItem(m, "start"); cJSON_IsNumber(start)) {
+          mem.start = static_cast<uint16_t>(std::max(0, static_cast<int>(start->valuedouble)));
+        }
+        if (cJSON* len = cJSON_GetObjectItem(m, "length"); cJSON_IsNumber(len)) {
+          mem.length = static_cast<uint16_t>(std::max(0, static_cast<int>(len->valuedouble)));
+        }
+        seg.members.push_back(mem);
+      }
+    }
+    if (seg.id.empty()) {
+      continue;
+    }
+    cfg.virtual_segments.push_back(std::move(seg));
+  }
+}
+
+void encode_virtual_segments(const AppConfig& cfg, cJSON* root) {
+  if (!root) return;
+  cJSON* arr = cJSON_AddArrayToObject(root, "virtual_segments");
+  if (!arr) return;
+  for (const auto& seg : cfg.virtual_segments) {
+    cJSON* obj = cJSON_CreateObject();
+    if (!obj) continue;
+    cJSON_AddStringToObject(obj, "id", seg.id.c_str());
+    cJSON_AddStringToObject(obj, "name", seg.name.c_str());
+    cJSON_AddBoolToObject(obj, "enabled", seg.enabled);
+    if (cJSON* fx = encode_effect_assignment(seg.effect, false)) {
+      cJSON_AddItemToObject(obj, "effect", fx);
+    }
+    cJSON* members = cJSON_AddArrayToObject(obj, "members");
+    if (members) {
+      for (const auto& mem : seg.members) {
+        cJSON* m = cJSON_CreateObject();
+        if (!m) continue;
+        cJSON_AddStringToObject(m, "type", mem.type.c_str());
+        cJSON_AddStringToObject(m, "id", mem.id.c_str());
+        cJSON_AddNumberToObject(m, "segment_index", mem.segment_index);
+        cJSON_AddNumberToObject(m, "start", mem.start);
+        cJSON_AddNumberToObject(m, "length", mem.length);
+        cJSON_AddItemToArray(members, m);
+      }
+    }
+    cJSON_AddItemToArray(arr, obj);
   }
 }
 

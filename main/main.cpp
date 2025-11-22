@@ -52,7 +52,7 @@ extern "C" void app_main(void) {
   wled_discovery_trigger_scan();
 
   if (s_cfg.mqtt.configured && !s_cfg.mqtt.host.empty()) {
-    mqtt_start(s_cfg);
+    mqtt_start(s_cfg, &s_led_engine);
   } else {
     ESP_LOGW(TAG, "MQTT nie skonfigurowane - ustaw w GUI (http://%s.local)", s_cfg.network.hostname.c_str());
   }

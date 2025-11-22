@@ -24,6 +24,7 @@
     "target_fps": 60,
     "bindings": []
   },
+  "virtual_segments": [],
   "led_engine": {
     "driver": "esp_rmt",
     "max_fps": 120,

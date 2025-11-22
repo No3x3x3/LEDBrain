@@ -109,6 +109,22 @@ struct EffectAssignment {
   bool beat_shuffle{false};
 };
 
+struct VirtualSegmentMember {
+  std::string type{"physical"};  // physical | wled
+  std::string id{};              // segment id or wled device id
+  uint16_t segment_index{0};
+  uint16_t start{0};
+  uint16_t length{0};
+};
+
+struct VirtualSegmentConfig {
+  std::string id{"vseg-1"};
+  std::string name{"Virtual"};
+  std::vector<VirtualSegmentMember> members{};
+  EffectAssignment effect{};  // effect applied to the whole virtual group
+  bool enabled{true};
+};
+
 struct EffectsConfig {
   std::string default_engine{"wled"};
   std::vector<EffectAssignment> assignments{};
@@ -126,6 +142,7 @@ struct LedHardwareConfig {
   bool dedicate_core{true};
   bool enable_dma{true};
   std::vector<LedSegmentConfig> segments{};
+  std::vector<VirtualSegmentConfig> virtual_segments{};
   AudioConfig audio{};
   EffectsConfig effects{};
 };

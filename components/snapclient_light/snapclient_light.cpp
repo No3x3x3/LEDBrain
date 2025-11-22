@@ -17,9 +17,6 @@ static TaskHandle_t s_task = nullptr;
 static bool s_running = false;
 static SnapcastConfig s_cfg{};
 
-// Snapcast protocol constants (simplified)
-static constexpr uint32_t SNAP_MAGIC = 0x434F4E4E;  // "CONN"
-
 struct FftBin {
   float re{0.0f};
   float im{0.0f};
@@ -166,47 +163,6 @@ int connect_snap(const SnapcastConfig& cfg) {
   return sock;
 }
 
-bool read_full(int sock, void* buf, size_t len) {
-  uint8_t* p = static_cast<uint8_t*>(buf);
-  size_t got = 0;
-  while (got < len) {
-    int r = recv(sock, reinterpret_cast<char*>(p + got), len - got, 0);
-    if (r <= 0) {
-      return false;
-    }
-    got += r;
-  }
-  return true;
-}
-
-bool expect_magic(int sock) {
-  uint32_t magic = 0;
-  if (!read_full(sock, &magic, sizeof(magic))) {
-    return false;
-  }
-  magic = ntohl(magic);
-  if (magic != SNAP_MAGIC) {
-    ESP_LOGE(TAG, "Invalid Snapcast magic: 0x%08x", magic);
-    return false;
-  }
-  return true;
-}
-
-bool send_hello(int sock, const SnapcastConfig& cfg) {
-  const uint32_t hello_len = 16;
-  std::vector<uint8_t> msg;
-  msg.resize(4 + hello_len);
-  uint32_t magic_net = htonl(SNAP_MAGIC);
-  memcpy(msg.data(), &magic_net, 4);
-  uint32_t len_net = htonl(hello_len);
-  memcpy(msg.data() + 4, &len_net, 4);
-  // Minimal HELLO (version/client name)
-  const char payload[16] = {'H', 'E', 'L', 'L', 'O', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-  memcpy(msg.data() + 8, payload, 16);
-  int sent = send(sock, msg.data(), msg.size(), 0);
-  return sent == static_cast<int>(msg.size());
-}
-
 void snap_task(void*) {
   ESP_LOGI(TAG, "Snapclient light starting -> %s:%u", s_cfg.host.c_str(), s_cfg.port);
   while (s_running) {
@@ -215,13 +171,7 @@ void snap_task(void*) {
       vTaskDelay(pdMS_TO_TICKS(1500));
       continue;
     }
-    if (!send_hello(sock, s_cfg) || !expect_magic(sock)) {
-      ESP_LOGE(TAG, "Snapcast handshake failed");
-      close(sock);
-      vTaskDelay(pdMS_TO_TICKS(500));
-      continue;
-    }
-
+    ESP_LOGI(TAG, "Snapclient connected (raw PCM expected)");
     const uint32_t sample_rate = 48000;
     const bool stereo = true;
     const size_t frame_samples = 2048;

@@ -12,6 +12,7 @@
       <h1>LEDBrain</h1>
     </div>
     <div class="top-actions">
+      <button id="btnSaveGlobal" class="primary ghost">Save</button>
       <button id="btnPlayback" class="primary subtle" data-state="stopped" disabled>Start output</button>
       <label class="top-slider" for="brightnessGlobal">
         <span id="lblGlobalBrightness" class="muted">Brightness</span>
@@ -232,174 +233,13 @@
           <article class="card">
             <header class="card-header">
               <div>
-                <h3 id="effectsTitle">Effects & audio gain</h3>
-                <p class="muted" id="effectsSubtitle">Group segments and assign engines.</p>
-                <p class="muted small" id="effectsPipelineHint">LEDBrain renders effects locally and pushes frames; WLED panes act only as display outputs.</p>
-                <p class="muted small" id="effectsHintPick">Pick an effect name (e.g. Rain, Power+) from the list.</p>
+                <h3 id="effectsTitle">Virtual segments / groups</h3>
+                <p class="muted" id="effectsSubtitle">Combine physical and WLED ranges into one target.</p>
               </div>
-              <div class="inline-field">
-                <label for="defaultEffectEngine" id="lblDefaultEngine">Default engine</label>
-                <select id="defaultEffectEngine">
-                  <option value="wled">WLED</option>
-                  <option value="ledfx">LedFx</option>
-                </select>
-              </div>
+              <button id="btnAddVirtual" class="ghost small">Add virtual segment</button>
             </header>
-            <div class="table-wrapper">
-              <table class="effects-table">
-                <thead>
-                  <tr>
-                    <th id="colFxSegment">Segment</th>
-                    <th id="colFxEngine">Engine</th>
-                    <th id="colFxEffect">Effect</th>
-                    <th id="colFxPreset">Preset</th>
-                    <th id="colFxBrightness">Brightness</th>
-                    <th id="colFxIntensity">Intensity</th>
-                    <th id="colFxSpeed">Speed</th>
-                    <th id="colFxAudioMode">Audio mode</th>
-                    <th id="colFxAudioProfile">Audio profile</th>
-                    <th id="colFxAudioLink">Audio link</th>
-                    <th id="colFxStereo">Stereo split</th>
-                    <th id="colFxGainL">Gain L</th>
-                    <th id="colFxGainR">Gain R</th>
-                    <th id="colFxSensitivity">Sensitivity</th>
-                    <th id="colFxThreshold">Threshold</th>
-                    <th id="colFxSmoothing">Smoothing</th>
-                  </tr>
-                </thead>
-                <tbody id="effectsTableBody">
-                  <tr class="placeholder">
-                    <td colspan="16" id="ledFxEmpty">Add a segment to configure effects</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div class="form-actions end">
-              <button type="button" class="primary" id="btnSaveLed">Save LED config</button>
-            </div>
+            <div id="virtualList" class="virtual-list"></div>
           </article>
-
-          <div class="effect-detail-grid">
-            <article class="card slim">
-              <header class="card-header">
-                <div>
-                  <h3 id="fxSegmentsTitle">Lista segmentów</h3>
-                  <p class="muted" id="fxSegmentsSubtitle">Wybierz segment do edycji efektu.</p>
-                </div>
-                <div class="pill" id="fxSelectedLabel">-</div>
-              </header>
-              <div class="fx-segment-list" id="fxSegmentList"></div>
-            </article>
-
-            <article class="card slim">
-              <header class="card-header">
-                <div>
-                  <h3 id="fxSettingsTitle">Ustawienia efektu</h3>
-                  <p class="muted" id="fxSettingsSubtitle">Parametry prędkości, intensywności i kolorów.</p>
-                </div>
-              </header>
-              <div class="form-grid slim fx-grid">
-                <label for="fxEffectPicker" id="lblFxEffectPicker">Preset/efekt</label>
-                <select id="fxEffectPicker"></select>
-                <div class="fx-effect-desc" id="fxEffectDescription">&nbsp;</div>
-                <label for="fxDirection" id="lblFxDirection">Kierunek</label>
-                <select id="fxDirection">
-                  <option value="forward">Forward</option>
-                  <option value="backward">Backward</option>
-                  <option value="center_out">Center out</option>
-                  <option value="edges_in">Edges in</option>
-                </select>
-                <label for="fxScatter" id="lblFxScatter">Rozpraszanie</label>
-                <input type="number" id="fxScatter" min="0" max="100" step="1">
-                <label for="fxFadeIn" id="lblFxFadeIn">Fade-in (ms)</label>
-                <input type="number" id="fxFadeIn" min="0" max="5000">
-                <label for="fxFadeOut" id="lblFxFadeOut">Fade-out (ms)</label>
-                <input type="number" id="fxFadeOut" min="0" max="5000">
-                <label for="fxColor1" id="lblFxColor1">Kolor 1</label>
-                <input type="color" id="fxColor1" value="#ffffff">
-                <label for="fxColor2" id="lblFxColor2">Kolor 2</label>
-                <input type="color" id="fxColor2" value="#ff6600">
-                <label for="fxColor3" id="lblFxColor3">Kolor 3</label>
-                <input type="color" id="fxColor3" value="#0033ff">
-                <label for="fxPalette" id="lblFxPalette">Paleta</label>
-                <input id="fxPalette" placeholder="icy, sunset, fire">
-                <label for="fxGradient" id="lblFxGradient">Gradient</label>
-                <input id="fxGradient" placeholder="#000-#fff-#0ff">
-                <label for="fxBrightnessOverride" id="lblFxBrightnessOverride">Brightness override</label>
-                <input type="number" id="fxBrightnessOverride" min="0" max="255">
-                <label for="fxGammaColor" id="lblFxGammaColor">Gamma koloru</label>
-                <input type="number" id="fxGammaColor" step="0.1" min="0.5" max="4">
-                <label for="fxGammaBrightness" id="lblFxGammaBrightness">Gamma jasności</label>
-                <input type="number" id="fxGammaBrightness" step="0.1" min="0.5" max="4">
-                <label for="fxBlendMode" id="lblFxBlendMode">Mieszanie efektów</label>
-                <select id="fxBlendMode">
-                  <option value="normal">Normal</option>
-                  <option value="add">Add</option>
-                  <option value="screen">Screen</option>
-                  <option value="multiply">Multiply</option>
-                </select>
-                <label for="fxLayers" id="lblFxLayers">Warstwy</label>
-                <input type="number" id="fxLayers" min="1" max="8">
-              </div>
-            </article>
-
-            <article class="card slim">
-              <header class="card-header">
-                <div>
-                  <h3 id="fxAudioTitle">Efekty audio-reaktywne</h3>
-                  <p class="muted" id="fxAudioSubtitle">Czułość pasm, beat i dynamika.</p>
-                </div>
-              </header>
-              <div class="form-grid slim fx-grid">
-                <label for="fxReactiveMode" id="lblFxReactiveMode">Tryb reakcji</label>
-                <select id="fxReactiveMode">
-                  <option value="full">Full spectrum</option>
-                  <option value="bass">Bass</option>
-                  <option value="mids">Mids</option>
-                  <option value="treble">Treble</option>
-                </select>
-                <label for="fxSensBass" id="lblFxSensBass">Czułość bass</label>
-                <input type="number" id="fxSensBass" step="0.05" min="0" max="5">
-                <label for="fxSensMids" id="lblFxSensMids">Czułość mids</label>
-                <input type="number" id="fxSensMids" step="0.05" min="0" max="5">
-                <label for="fxSensTreble" id="lblFxSensTreble">Czułość treble</label>
-                <input type="number" id="fxSensTreble" step="0.05" min="0" max="5">
-                <label for="fxAmplitude" id="lblFxAmplitude">Skalowanie amplitudy</label>
-                <input type="number" id="fxAmplitude" step="0.05" min="0" max="5">
-                <label for="fxBrightnessCompress" id="lblFxBrightnessCompress">Kompresja jasności</label>
-                <input type="number" id="fxBrightnessCompress" step="0.05" min="0" max="5">
-                <label for="fxBeatResponse" id="lblFxBeatResponse">Reakcja na beat</label>
-                <label class="switch compact">
-                  <input type="checkbox" id="fxBeatResponse">
-                  <span></span>
-                </label>
-                <label for="fxAttack" id="lblFxAttack">Attack (ms)</label>
-                <input type="number" id="fxAttack" min="0" max="1000">
-                <label for="fxRelease" id="lblFxRelease">Release (ms)</label>
-                <input type="number" id="fxRelease" min="0" max="2000">
-              </div>
-            </article>
-
-            <article class="card slim">
-              <header class="card-header">
-                <div>
-                  <h3 id="fxSceneTitle">Presety i sceny</h3>
-                  <p class="muted" id="fxSceneSubtitle">Szybkie zapisy i przełączanie na beat.</p>
-                </div>
-              </header>
-              <div class="form-grid slim fx-grid">
-                <label for="fxScenePreset" id="lblFxScenePreset">Preset</label>
-                <input id="fxScenePreset" placeholder="sunset, chillout">
-                <label for="fxSceneSchedule" id="lblFxSceneSchedule">Harmonogram</label>
-                <input id="fxSceneSchedule" placeholder="18:00-23:30, weekend">
-                <label for="fxBeatShuffle" id="lblFxBeatShuffle">Przełączanie na beat</label>
-                <label class="switch compact">
-                  <input type="checkbox" id="fxBeatShuffle">
-                  <span></span>
-                </label>
-              </div>
-            </article>
-          </div>
         </div>
 
         <div class="led-pane" id="config-audio-pane">
@@ -451,6 +291,9 @@
               </label>
             </div>
             <div class="form-hint" id="snapHint">UDP reduces latency but needs stable network.</div>
+            <div class="form-actions end">
+              <button type="button" class="primary" id="btnSaveAudio">Save audio config</button>
+            </div>
           </article>
         </div>
 

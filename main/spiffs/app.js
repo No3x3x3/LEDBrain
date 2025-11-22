@@ -9,7 +9,7 @@
   timers: { info: null, wled: null, uptime: null },
   lastInfoRefresh: 0,
   selectedFxSegment: null,
-  selectedWledDevice: null,
+  selectedDeviceKey: null,
   latestRelease: null,
   otaChecking: false,
   globalBrightness: 255,
@@ -309,7 +309,11 @@ function renderLang() {
     colFxThreshold: "col_fx_threshold",
     colFxSmoothing: "col_fx_smoothing",
     ledFxEmpty: "led_fx_empty",
+    btnSaveAudio: "btn_save_audio",
+    btnSaveGlobal: "btn_save_global",
     btnSaveLed: "btn_save_led",
+    btnSaveAudio: "btn_save_audio",
+    btnSaveGlobal: "btn_save_global",
     lightsGroupWled: "lights_group_wled",
     lightsGroupPhysical: "lights_group_physical",
     lightsGroupVirtual: "lights_group_virtual",
@@ -707,22 +711,52 @@ function buildPhysicalSegmentsSummary() {
 }
 
 function buildVirtualSegmentsSummary() {
-  const led = ensureLedEngineConfig();
-  if (!led) return [];
-  const segments = new Map((led.segments || []).map((seg) => [seg.id, seg]));
-  return (Array.isArray(led.effects?.assignments) ? led.effects.assignments : [])
-    .map((fx, idx) => {
-      const segment = segments.get(fx.segment_id);
-      return {
-        id: fx.segment_id || `virtual-${idx}`,
-        name: segment?.name || fx.segment_id || `Virtual ${idx + 1}`,
-        engine: fx.engine || led.effects?.default_engine || "",
-        effect: fx.effect || "",
-        audio_mode: fx.audio_mode || "",
-        audio_link: !!fx.audio_link,
-      };
-    })
+  ensureVirtualSegments();
+  return (state.config.virtual_segments || [])
+    .map((seg, idx) => ({
+      id: seg.id || `virtual-${idx + 1}`,
+      name: seg.name || seg.id || `Virtual ${idx + 1}`,
+      engine: seg.effect?.engine || "ledfx",
+      effect: seg.effect?.effect || "",
+      audio_mode: seg.effect?.audio_mode || "",
+      audio_link: !!seg.effect?.audio_link,
+      enabled: seg.enabled !== false,
+    }))
     .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
+}
+
+function buildUnifiedDevices() {
+  const physical = buildPhysicalSegmentsSummary().map((seg) => ({
+    key: `physical:${seg.id}`,
+    type: "physical",
+    name: seg.name || seg.id,
+    leds: seg.leds,
+    segments: 1,
+    online: seg.enabled,
+    meta: seg,
+  }));
+  ensureVirtualSegments();
+  const virtual = (state.config.virtual_segments || []).map((seg, idx) => ({
+    key: `virtual:${seg.id || idx}`,
+    type: "virtual",
+    name: seg.name || seg.id || `Virtual ${idx + 1}`,
+    leds: 0,
+    segments: seg.members?.length || 0,
+    online: seg.enabled !== false,
+    meta: seg,
+  }));
+  const wled = mergeWledDevices().map((dev) => ({
+    key: `wled:${dev.id || dev.address || dev.name}`,
+    type: "wled",
+    name: dev.name || dev.id || dev.address || "WLED",
+    leds: dev.leds,
+    segments: dev.segments,
+    online: dev.online,
+    meta: dev,
+  }));
+  return [...physical, ...virtual, ...wled].sort((a, b) =>
+    (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
+  );
 }
 
 function renderWledLightCard(dev) {
@@ -869,37 +903,6 @@ function renderWledDetail(dev) {
       <label>${t("target_fps") || "Target FPS"}
         <input type="number" min="1" max="240" id="wledFxFps" value="${fx.target_fps || 60}">
       </label>
-    </div>
-    <div class="form-grid">
-      <label>${t("fx_effect_picker") || "Effect"}
-        <input list="effectCatalog" id="wledFxEffect" value="${binding.effect?.effect || ""}">
-      </label>
-      <label>${t("colFxPreset") || "Preset"}
-        <input id="wledFxPreset" value="${binding.effect?.preset || ""}">
-      </label>
-      <label>${t("fx_color1") || "Color 1"}
-        <input type="color" id="wledFxColor1" value="${binding.effect?.color1 || "#ffffff"}">
-      </label>
-      <label>${t("fx_color2") || "Color 2"}
-        <input type="color" id="wledFxColor2" value="${binding.effect?.color2 || "#ff6600"}">
-      </label>
-      <label>${t("fx_color3") || "Color 3"}
-        <input type="color" id="wledFxColor3" value="${binding.effect?.color3 || "#0033ff"}">
-      </label>
-      <label>${t("fx_brightness_override") || "Brightness"}
-        <input type="number" min="0" max="255" id="wledFxBrightness" value="${binding.effect?.brightness ?? 255}">
-      </label>
-      <label>${t("colFxIntensity") || "Intensity"}
-        <input type="number" min="0" max="255" id="wledFxIntensity" value="${binding.effect?.intensity ?? 128}">
-      </label>
-      <label>${t("colFxSpeed") || "Speed"}
-        <input type="number" min="0" max="255" id="wledFxSpeed" value="${binding.effect?.speed ?? 128}">
-      </label>
-      <label>${t("colFxAudioProfile") || "Audio profile"}
-        <select id="wledFxAudioProfile">
-          ${renderAudioProfileOptions(binding.effect?.audio_profile || "default")}
-        </select>
-      </label>
       <label>${t("wled_segment_index") || "Segment"}
         <input type="number" min="0" max="${dev.segments || 1}" id="wledFxSegment" value="${binding.segment_index || 0}">
       </label>
@@ -918,56 +921,24 @@ function renderWledDetail(dev) {
         <input type="checkbox" id="wledFxDdp" ${binding.ddp !== false ? "checked" : ""}>
         <span></span> ${t("wled_ddp") || "DDP stream"}
       </label>
-      <label class="switch">
-        <input type="checkbox" id="wledFxAudioLink" ${binding.effect?.audio_link ? "checked" : ""}>
-        <span></span> ${t("colFxAudioLink") || "Audio link"}
-      </label>
     </div>
+    <div id="wledEffectForm"></div>
     <div class="actions">
       <button class="primary" id="btnSaveWledFx">${t("btn_save_led") || "Save"}</button>
     </div>
   `;
+
+  const formContainer = qs("wledEffectForm");
+  const fakeSegment = { name: dev.name || dev.id || "WLED", led_count: dev.leds || 0, audio: defaultSegmentAudio() };
+  if (formContainer) {
+    renderEffectDetailForm(formContainer, fakeSegment, binding.effect);
+  }
 
   const fpsInput = qs("wledFxFps");
   fpsInput?.addEventListener("change", (e) => {
     const val = parseInt(e.target.value, 10);
     fx.target_fps = Math.max(1, Math.min(Number.isFinite(val) ? val : 60, 240));
     e.target.value = fx.target_fps;
-  });
-
-  const mapNumber = [
-    ["wledFxBrightness", "brightness", 0, 255],
-    ["wledFxIntensity", "intensity", 0, 255],
-    ["wledFxSpeed", "speed", 0, 255],
-  ];
-  mapNumber.forEach(([id, field, min, max]) => {
-    const input = qs(id);
-    input?.addEventListener("change", (ev) => {
-      let val = parseInt(ev.target.value, 10);
-      if (!Number.isFinite(val)) val = 0;
-      val = Math.max(min, Math.min(val, max));
-      binding.effect[field] = val;
-      ev.target.value = val;
-    });
-  });
-
-  const colorMap = [
-    ["wledFxColor1", "color1"],
-    ["wledFxColor2", "color2"],
-    ["wledFxColor3", "color3"],
-  ];
-  colorMap.forEach(([id, field]) => {
-    const input = qs(id);
-    input?.addEventListener("change", (ev) => {
-      binding.effect[field] = ev.target.value || binding.effect[field] || "";
-    });
-  });
-
-  qs("wledFxEffect")?.addEventListener("change", (ev) => {
-    binding.effect.effect = ev.target.value || "";
-  });
-  qs("wledFxPreset")?.addEventListener("change", (ev) => {
-    binding.effect.preset = ev.target.value || "";
   });
   qs("wledFxSegment")?.addEventListener("change", (ev) => {
     let val = parseInt(ev.target.value, 10);
@@ -981,12 +952,6 @@ function renderWledDetail(dev) {
   qs("wledFxDdp")?.addEventListener("change", (ev) => {
     binding.ddp = ev.target.checked;
   });
-  qs("wledFxAudioLink")?.addEventListener("change", (ev) => {
-    binding.effect.audio_link = ev.target.checked;
-  });
-  qs("wledFxAudioProfile")?.addEventListener("change", (ev) => {
-    binding.effect.audio_profile = ev.target.value || "default";
-  });
   qs("wledFxAudioChannel")?.addEventListener("change", (ev) => {
     binding.audio_channel = ev.target.value || "mix";
   });
@@ -996,52 +961,434 @@ function renderWledDetail(dev) {
   });
 }
 
+function renderEffectDetailForm(target, segment, assignment) {
+  if (!target) return;
+  const name = segment?.name || assignment?.segment_id || t("not_set");
+  const audio = segment?.audio || defaultSegmentAudio();
+  target.innerHTML = `
+    <div class="device-meta-grid">
+      <div class="device-meta"><strong>${t("colSegName") || "Name"}</strong><span>${name}</span></div>
+      <div class="device-meta"><strong>${t("colSegLeds") || "LEDs"}</strong><span>${segment?.led_count ?? "-"}</span></div>
+      <div class="device-meta"><strong>${t("colFxEngine") || "Engine"}</strong><span>${assignment.engine || "wled"}</span></div>
+    </div>
+    <div class="form-grid">
+      <label>${t("colFxEngine") || "Engine"}
+        <select id="devFxEngine">
+          <option value="wled" ${assignment.engine === "wled" ? "selected" : ""}>WLED</option>
+          <option value="ledfx" ${assignment.engine === "ledfx" ? "selected" : ""}>LedFx</option>
+        </select>
+      </label>
+      <label>${t("fx_effect_picker") || "Effect"}
+        <input list="effectCatalog" id="devFxEffect" value="${assignment.effect || ""}">
+      </label>
+      <label>${t("colFxPreset") || "Preset"}
+        <input id="devFxPreset" value="${assignment.preset || ""}">
+      </label>
+      <label>${t("fx_color1") || "Color 1"}
+        <input type="color" id="devFxColor1" value="${assignment.color1 || "#ffffff"}">
+      </label>
+      <label>${t("fx_color2") || "Color 2"}
+        <input type="color" id="devFxColor2" value="${assignment.color2 || "#ff6600"}">
+      </label>
+      <label>${t("fx_color3") || "Color 3"}
+        <input type="color" id="devFxColor3" value="${assignment.color3 || "#0033ff"}">
+      </label>
+      <label>${t("fx_brightness_override") || "Brightness"}
+        <input type="number" min="0" max="255" id="devFxBrightness" value="${assignment.brightness ?? 255}">
+      </label>
+      <label>${t("colFxIntensity") || "Intensity"}
+        <input type="number" min="0" max="255" id="devFxIntensity" value="${assignment.intensity ?? 128}">
+      </label>
+      <label>${t("colFxSpeed") || "Speed"}
+        <input type="number" min="0" max="255" id="devFxSpeed" value="${assignment.speed ?? 128}">
+      </label>
+      <label>${t("colFxAudioProfile") || "Audio profile"}
+        <select id="devFxAudioProfile">
+          ${renderAudioProfileOptions(assignment.audio_profile || "default")}
+        </select>
+      </label>
+      <label>${t("colFxAudioMode") || "Audio mode"}
+        <select id="devFxAudioMode">
+          ${renderAudioModeOptions(assignment.audio_mode || "spectrum")}
+        </select>
+      </label>
+      <label>${t("fxReactiveMode") || "Reactive mode"}
+        <select id="devFxReactiveMode">
+          <option value="full" ${assignment.reactive_mode === "full" ? "selected" : ""}>Full spectrum</option>
+          <option value="bass" ${assignment.reactive_mode === "bass" ? "selected" : ""}>Bass</option>
+          <option value="mids" ${assignment.reactive_mode === "mids" ? "selected" : ""}>Mids</option>
+          <option value="treble" ${assignment.reactive_mode === "treble" ? "selected" : ""}>Treble</option>
+        </select>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="devFxAudioLink" ${assignment.audio_link ? "checked" : ""}>
+        <span></span> ${t("colFxAudioLink") || "Audio link"}
+      </label>
+      <label>${t("lblFxDirection") || "Direction"}
+        <select id="devFxDirection">
+          <option value="forward" ${assignment.direction === "forward" ? "selected" : ""}>Forward</option>
+          <option value="backward" ${assignment.direction === "backward" ? "selected" : ""}>Backward</option>
+          <option value="center_out" ${assignment.direction === "center_out" ? "selected" : ""}>Center out</option>
+          <option value="edges_in" ${assignment.direction === "edges_in" ? "selected" : ""}>Edges in</option>
+        </select>
+      </label>
+      <label>${t("lblFxScatter") || "Scatter"}
+        <input type="number" id="devFxScatter" min="0" max="100" step="1" value="${assignment.scatter ?? 0}">
+      </label>
+      <label>${t("lblFxFadeIn") || "Fade-in (ms)"}
+        <input type="number" id="devFxFadeIn" min="0" max="5000" value="${assignment.fade_in ?? 0}">
+      </label>
+      <label>${t("lblFxFadeOut") || "Fade-out (ms)"}
+        <input type="number" id="devFxFadeOut" min="0" max="5000" value="${assignment.fade_out ?? 0}">
+      </label>
+      <label>${t("lblFxPalette") || "Palette"}
+        <input id="devFxPalette" value="${assignment.palette || ""}" placeholder="icy, sunset, fire">
+      </label>
+      <label>${t("lblFxGradient") || "Gradient"}
+        <input id="devFxGradient" value="${assignment.gradient || ""}" placeholder="#000-#fff-#0ff">
+      </label>
+      <label>${t("lblFxBrightnessOverride") || "Brightness override"}
+        <input type="number" id="devFxBrightnessOverride" min="0" max="255" value="${assignment.brightness_override ?? 0}">
+      </label>
+      <label>${t("lblFxGammaColor") || "Gamma color"}
+        <input type="number" id="devFxGammaColor" step="0.1" min="0.5" max="4" value="${assignment.gamma_color ?? 2.2}">
+      </label>
+      <label>${t("lblFxGammaBrightness") || "Gamma brightness"}
+        <input type="number" id="devFxGammaBrightness" step="0.1" min="0.5" max="4" value="${assignment.gamma_brightness ?? 2.2}">
+      </label>
+      <label>${t("lblFxBlendMode") || "Blend"}
+        <select id="devFxBlendMode">
+          <option value="normal" ${assignment.blend_mode === "normal" ? "selected" : ""}>Normal</option>
+          <option value="add" ${assignment.blend_mode === "add" ? "selected" : ""}>Add</option>
+          <option value="screen" ${assignment.blend_mode === "screen" ? "selected" : ""}>Screen</option>
+          <option value="multiply" ${assignment.blend_mode === "multiply" ? "selected" : ""}>Multiply</option>
+        </select>
+      </label>
+      <label>${t("lblFxLayers") || "Layers"}
+        <input type="number" id="devFxLayers" min="1" max="8" value="${assignment.layers ?? 1}">
+      </label>
+      <label>${t("lblFxSensBass") || "Bass gain"}
+        <input type="number" id="devFxSensBass" step="0.05" min="0" max="5" value="${assignment.band_gain_low ?? 1}">
+      </label>
+      <label>${t("lblFxSensMids") || "Mids gain"}
+        <input type="number" id="devFxSensMids" step="0.05" min="0" max="5" value="${assignment.band_gain_mid ?? 1}">
+      </label>
+      <label>${t("lblFxSensTreble") || "Treble gain"}
+        <input type="number" id="devFxSensTreble" step="0.05" min="0" max="5" value="${assignment.band_gain_high ?? 1}">
+      </label>
+      <label>${t("lblFxAmplitude") || "Amplitude scale"}
+        <input type="number" id="devFxAmplitude" step="0.05" min="0" max="5" value="${assignment.amplitude_scale ?? 1}">
+      </label>
+      <label>${t("lblFxBrightnessCompress") || "Brightness compress"}
+        <input type="number" id="devFxBrightnessCompress" step="0.05" min="0" max="5" value="${assignment.brightness_compress ?? 0}">
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="devFxBeatResponse" ${assignment.beat_response ? "checked" : ""}>
+        <span></span> ${t("lblFxBeatResponse") || "Beat response"}
+      </label>
+      <label>${t("lblFxAttack") || "Attack (ms)"}
+        <input type="number" id="devFxAttack" min="0" max="2000" value="${assignment.attack_ms ?? 25}">
+      </label>
+      <label>${t("lblFxRelease") || "Release (ms)"}
+        <input type="number" id="devFxRelease" min="0" max="3000" value="${assignment.release_ms ?? 120}">
+      </label>
+      <label>${t("lblFxScenePreset") || "Scene preset"}
+        <input id="devFxScenePreset" value="${assignment.scene_preset || ""}">
+      </label>
+      <label>${t("lblFxSceneSchedule") || "Scene schedule"}
+        <input id="devFxSceneSchedule" value="${assignment.scene_schedule || ""}">
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="devFxBeatShuffle" ${assignment.beat_shuffle ? "checked" : ""}>
+        <span></span> ${t("lblFxBeatShuffle") || "Beat shuffle"}
+      </label>
+    </div>
+    <h4>${t("fx_audio_title") || "Audio reactive"}</h4>
+    <div class="form-grid">
+      <label class="switch">
+        <input type="checkbox" id="devAudioStereoSplit" ${audio.stereo_split ? "checked" : ""}>
+        <span></span> ${t("colFxStereo") || "Stereo split"}
+      </label>
+      <label>${t("colFxGainL") || "Gain L"}
+        <input type="number" step="0.05" id="devAudioGainL" value="${audio.gain_left ?? 1}">
+      </label>
+      <label>${t("colFxGainR") || "Gain R"}
+        <input type="number" step="0.05" id="devAudioGainR" value="${audio.gain_right ?? 1}">
+      </label>
+      <label>${t("colFxSensitivity") || "Sensitivity"}
+        <input type="number" min="0" max="2" step="0.01" id="devAudioSensitivity" value="${audio.sensitivity ?? 0.85}">
+      </label>
+      <label>${t("colFxThreshold") || "Threshold"}
+        <input type="number" min="0" max="1" step="0.01" id="devAudioThreshold" value="${audio.threshold ?? 0.05}">
+      </label>
+      <label>${t("colFxSmoothing") || "Smoothing"}
+        <input type="number" min="0" max="1" step="0.01" id="devAudioSmoothing" value="${audio.smoothing ?? 0.65}">
+      </label>
+    </div>
+    <div class="actions">
+      <button class="primary" id="btnSaveDeviceFx">${t("btn_save_led") || "Save"}</button>
+    </div>
+  `;
+
+  qs("devFxEngine")?.addEventListener("change", (ev) => {
+    assignment.engine = ev.target.value || assignment.engine;
+  });
+  qs("devFxEffect")?.addEventListener("change", (ev) => {
+    assignment.effect = ev.target.value || "";
+  });
+  qs("devFxPreset")?.addEventListener("change", (ev) => {
+    assignment.preset = ev.target.value || "";
+  });
+  qs("devFxColor1")?.addEventListener("change", (ev) => {
+    assignment.color1 = ev.target.value || assignment.color1;
+  });
+  qs("devFxColor2")?.addEventListener("change", (ev) => {
+    assignment.color2 = ev.target.value || assignment.color2;
+  });
+  qs("devFxColor3")?.addEventListener("change", (ev) => {
+    assignment.color3 = ev.target.value || assignment.color3;
+  });
+  [
+    ["devFxBrightness", "brightness", 0, 255],
+    ["devFxIntensity", "intensity", 0, 255],
+    ["devFxSpeed", "speed", 0, 255],
+  ].forEach(([id, field, min, max]) => {
+    const input = qs(id);
+    input?.addEventListener("change", (ev) => {
+      let val = parseInt(ev.target.value, 10);
+      if (!Number.isFinite(val)) val = min;
+      val = Math.max(min, Math.min(val, max));
+      assignment[field] = val;
+      ev.target.value = val;
+    });
+  });
+  qs("devFxAudioProfile")?.addEventListener("change", (ev) => {
+    assignment.audio_profile = ev.target.value || "default";
+  });
+  qs("devFxAudioMode")?.addEventListener("change", (ev) => {
+    assignment.audio_mode = ev.target.value || "spectrum";
+  });
+  qs("devFxAudioLink")?.addEventListener("change", (ev) => {
+    assignment.audio_link = ev.target.checked;
+  });
+  qs("devFxReactiveMode")?.addEventListener("change", (ev) => {
+    assignment.reactive_mode = ev.target.value || "full";
+  });
+  qs("devFxDirection")?.addEventListener("change", (ev) => {
+    assignment.direction = ev.target.value || "forward";
+  });
+  qs("devFxScatter")?.addEventListener("input", (ev) => {
+    const val = parseFloat(ev.target.value);
+    assignment.scatter = Number.isFinite(val) ? val : assignment.scatter;
+  });
+  qs("devFxFadeIn")?.addEventListener("input", (ev) => {
+    assignment.fade_in = Math.max(0, parseInt(ev.target.value, 10) || 0);
+  });
+  qs("devFxFadeOut")?.addEventListener("input", (ev) => {
+    assignment.fade_out = Math.max(0, parseInt(ev.target.value, 10) || 0);
+  });
+  qs("devFxPalette")?.addEventListener("change", (ev) => {
+    assignment.palette = ev.target.value || "";
+  });
+  qs("devFxGradient")?.addEventListener("change", (ev) => {
+    assignment.gradient = ev.target.value || "";
+  });
+  qs("devFxBrightnessOverride")?.addEventListener("change", (ev) => {
+    let val = parseInt(ev.target.value, 10);
+    if (!Number.isFinite(val)) val = 0;
+    assignment.brightness_override = Math.max(0, Math.min(val, 255));
+    ev.target.value = assignment.brightness_override;
+  });
+  qs("devFxGammaColor")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    assignment.gamma_color = Number.isFinite(val) ? val : assignment.gamma_color;
+  });
+  qs("devFxGammaBrightness")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    assignment.gamma_brightness = Number.isFinite(val) ? val : assignment.gamma_brightness;
+  });
+  qs("devFxBlendMode")?.addEventListener("change", (ev) => {
+    assignment.blend_mode = ev.target.value || "normal";
+  });
+  qs("devFxLayers")?.addEventListener("change", (ev) => {
+    let val = parseInt(ev.target.value, 10);
+    if (!Number.isFinite(val)) val = 1;
+    assignment.layers = Math.max(1, Math.min(val, 8));
+    ev.target.value = assignment.layers;
+  });
+  qs("devFxSensBass")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    assignment.band_gain_low = Number.isFinite(val) ? val : assignment.band_gain_low;
+  });
+  qs("devFxSensMids")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    assignment.band_gain_mid = Number.isFinite(val) ? val : assignment.band_gain_mid;
+  });
+  qs("devFxSensTreble")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    assignment.band_gain_high = Number.isFinite(val) ? val : assignment.band_gain_high;
+  });
+  qs("devFxAmplitude")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    assignment.amplitude_scale = Number.isFinite(val) ? val : assignment.amplitude_scale;
+  });
+  qs("devFxBrightnessCompress")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    assignment.brightness_compress = Number.isFinite(val) ? val : assignment.brightness_compress;
+  });
+  qs("devFxBeatResponse")?.addEventListener("change", (ev) => {
+    assignment.beat_response = ev.target.checked;
+  });
+  qs("devFxAttack")?.addEventListener("change", (ev) => {
+    let val = parseInt(ev.target.value, 10);
+    if (!Number.isFinite(val)) val = 0;
+    assignment.attack_ms = Math.max(0, val);
+    ev.target.value = assignment.attack_ms;
+  });
+  qs("devFxRelease")?.addEventListener("change", (ev) => {
+    let val = parseInt(ev.target.value, 10);
+    if (!Number.isFinite(val)) val = 0;
+    assignment.release_ms = Math.max(0, val);
+    ev.target.value = assignment.release_ms;
+  });
+  qs("devFxScenePreset")?.addEventListener("change", (ev) => {
+    assignment.scene_preset = ev.target.value || "";
+  });
+  qs("devFxSceneSchedule")?.addEventListener("change", (ev) => {
+    assignment.scene_schedule = ev.target.value || "";
+  });
+  qs("devFxBeatShuffle")?.addEventListener("change", (ev) => {
+    assignment.beat_shuffle = ev.target.checked;
+  });
+  qs("devAudioStereoSplit")?.addEventListener("change", (ev) => {
+    if (segment) {
+      segment.audio = segment.audio || defaultSegmentAudio();
+      segment.audio.stereo_split = ev.target.checked;
+    }
+  });
+  qs("devAudioGainL")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    if (segment) {
+      segment.audio = segment.audio || defaultSegmentAudio();
+      segment.audio.gain_left = Number.isFinite(val) ? val : segment.audio.gain_left;
+    }
+  });
+  qs("devAudioGainR")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    if (segment) {
+      segment.audio = segment.audio || defaultSegmentAudio();
+      segment.audio.gain_right = Number.isFinite(val) ? val : segment.audio.gain_right;
+    }
+  });
+  qs("devAudioSensitivity")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    if (segment) {
+      segment.audio = segment.audio || defaultSegmentAudio();
+      segment.audio.sensitivity = Number.isFinite(val) ? val : segment.audio.sensitivity;
+    }
+  });
+  qs("devAudioThreshold")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    if (segment) {
+      segment.audio = segment.audio || defaultSegmentAudio();
+      segment.audio.threshold = Number.isFinite(val) ? val : segment.audio.threshold;
+    }
+  });
+  qs("devAudioSmoothing")?.addEventListener("change", (ev) => {
+    const val = parseFloat(ev.target.value);
+    if (segment) {
+      segment.audio = segment.audio || defaultSegmentAudio();
+      segment.audio.smoothing = Number.isFinite(val) ? val : segment.audio.smoothing;
+    }
+  });
+  qs("btnSaveDeviceFx")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    saveLedConfig();
+  });
+}
+
+function renderDeviceDetail(entry) {
+  const detail = qs("deviceDetailBody");
+  if (!detail) return;
+  if (!entry) {
+    detail.innerHTML = `<div class="placeholder muted">${t("device_detail_placeholder") || "Select device"}</div>`;
+    return;
+  }
+  if (entry.type === "wled") {
+    renderWledDetail(entry.meta);
+    return;
+  }
+  const led = ensureLedEngineConfig();
+  if (!led) return;
+  if (entry.type === "virtual") {
+    const seg = entry.meta;
+    seg.effect = seg.effect || { effect: "Solid", brightness: 255, intensity: 128, speed: 128, audio_profile: "default" };
+    const fakeSegment = { name: seg.name, led_count: seg.members?.length || 0, audio: defaultSegmentAudio() };
+    renderEffectDetailForm(detail, fakeSegment, seg.effect);
+  } else {
+    const assignment = ensureEffectAssignment(entry.meta.id || entry.meta.segment_id);
+    const segment = (led.segments || []).find((s) => s.id === assignment.segment_id);
+    renderEffectDetailForm(detail, segment, assignment);
+  }
+}
+
 function renderDeviceExplorer() {
   const list = qs("deviceList");
   if (!list) return;
-  const devices = mergeWledDevices();
+  const devices = buildUnifiedDevices();
   list.innerHTML = "";
   if (!devices.length) {
     const empty = document.createElement("div");
     empty.className = "placeholder muted";
     empty.textContent = t("wled_empty_hint") || "No WLED devices";
     list.appendChild(empty);
-    renderWledDetail(null);
+    renderDeviceDetail(null);
     return;
   }
-  if (!state.selectedWledDevice && devices.length) {
-    state.selectedWledDevice = devices[0].id || devices[0].address || devices[0].name;
+  if (!state.selectedDeviceKey && devices.length) {
+    state.selectedDeviceKey = devices[0].key;
   }
   devices.forEach((dev) => {
     const btn = document.createElement("button");
-    const deviceId = dev.id || dev.address || dev.name;
-    btn.className = `device-list-item ${state.selectedWledDevice === deviceId ? "active" : ""}`;
+    btn.className = `device-list-item ${state.selectedDeviceKey === dev.key ? "active" : ""}`;
     const name = document.createElement("strong");
-    name.textContent = dev.name || dev.id || dev.address || "WLED";
+    name.textContent = dev.name;
     btn.appendChild(name);
     const meta = document.createElement("div");
     meta.className = "device-list-meta";
-    if (dev.address || dev.ip) {
+    if (dev.type === "wled" && (dev.meta.address || dev.meta.ip)) {
       const span = document.createElement("span");
-      span.textContent = dev.address || dev.ip;
+      span.textContent = dev.meta.address || dev.meta.ip;
+      meta.appendChild(span);
+    } else {
+      const span = document.createElement("span");
+      span.textContent = dev.type.toUpperCase();
       meta.appendChild(span);
     }
-    if (dev.version) {
+    if (dev.meta.version) {
       const span = document.createElement("span");
-      span.textContent = dev.version;
+      span.textContent = dev.meta.version;
       meta.appendChild(span);
     }
     btn.appendChild(meta);
-    btn.appendChild(createStatusPill(dev.online ? (t("wled_status_online") || "online") : (t("wled_status_offline") || "offline"), dev.online ? "ok" : "warn"));
+    const statusLabel =
+      dev.type === "wled"
+        ? dev.online
+          ? t("wled_status_online") || "online"
+          : t("wled_status_offline") || "offline"
+        : dev.online
+        ? t("badge_enabled") || "enabled"
+        : t("badge_disabled") || "disabled";
+    btn.appendChild(createStatusPill(statusLabel, dev.online ? "ok" : "warn"));
     btn.addEventListener("click", () => {
-      state.selectedWledDevice = deviceId;
+      state.selectedDeviceKey = dev.key;
       renderDeviceExplorer();
-      renderWledDetail(dev);
+      renderDeviceDetail(dev);
     });
     list.appendChild(btn);
   });
-  const selected = devices.find((d) => (d.id || d.address || d.name) === state.selectedWledDevice);
-  renderWledDetail(selected || devices[0]);
+  const selected = devices.find((d) => d.key === state.selectedDeviceKey);
+  renderDeviceDetail(selected || devices[0]);
 }
 
 function updateOverview() {
@@ -1387,6 +1734,39 @@ function ensureLedEngineConfig() {
   return led;
 }
 
+function ensureVirtualSegments() {
+  if (!state.config) state.config = {};
+  if (!Array.isArray(state.config.virtual_segments)) {
+    state.config.virtual_segments = [];
+  }
+  state.config.virtual_segments.forEach((seg, idx) => {
+    seg.id = seg.id || `vseg-${idx + 1}`;
+    seg.name = seg.name || seg.id;
+    seg.enabled = seg.enabled !== false;
+    seg.members = Array.isArray(seg.members) ? seg.members : [];
+    seg.members.forEach((m) => {
+      m.type = m.type || "physical";
+      m.id = m.id || "";
+      m.segment_index = Number.isFinite(m.segment_index) ? m.segment_index : 0;
+      m.start = Number.isFinite(m.start) ? m.start : 0;
+      m.length = Number.isFinite(m.length) ? m.length : 0;
+    });
+    seg.effect =
+      seg.effect ||
+      {
+        engine: "ledfx",
+        effect: "Solid",
+        brightness: 255,
+        intensity: 128,
+        speed: 128,
+        audio_profile: "default",
+        audio_link: false,
+        audio_mode: "spectrum",
+      };
+  });
+  return state.config.virtual_segments;
+}
+
 function createSegmentTemplate() {
   const led = ensureLedEngineConfig();
   const index = (led?.segments?.length || 0) + 1;
@@ -1408,6 +1788,26 @@ function createSegmentTemplate() {
     render_order: index - 1,
     effect_source: "local",
     audio: defaultSegmentAudio(),
+  };
+}
+
+function createVirtualSegmentTemplate() {
+  const idx = (state.config?.virtual_segments?.length || 0) + 1;
+  return {
+    id: `vseg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    name: `Virtual ${idx}`,
+    enabled: true,
+    members: [],
+    effect: {
+      engine: "ledfx",
+      effect: "Solid",
+      brightness: 255,
+      intensity: 128,
+      speed: 128,
+      audio_profile: "default",
+      audio_link: false,
+      audio_mode: "spectrum",
+    },
   };
 }
 
@@ -1530,6 +1930,7 @@ function renderLedConfig() {
   renderHardwareForm(led);
   renderSegmentTable(led);
   renderEffectRows(led);
+  renderVirtualSegments();
   populateAudioForm(led);
   const defEngine = qs("defaultEffectEngine");
   if (defEngine) {
@@ -1719,65 +2120,177 @@ function renderPinOptions(selected) {
 function renderEffectRows(led) {
   const body = qs("effectsTableBody");
   if (!body) return;
-  if (!led.segments.length) {
-    body.innerHTML = `<tr class="placeholder"><td colspan="16">${t("led_fx_empty")}</td></tr>`;
+  body.innerHTML = `<tr class="placeholder"><td colspan="16">${t("led_fx_empty") || "Configure effects from the device list."}</td></tr>`;
+}
+
+function renderVirtualSegments() {
+  ensureVirtualSegments();
+  const container = qs("virtualList");
+  if (!container) return;
+  const segments = state.config.virtual_segments || [];
+  if (!segments.length) {
+    container.innerHTML = `<div class="placeholder muted">${t("led_segments_empty") || "No virtual segments yet"}</div>`;
     return;
   }
-  const rows = led.segments
-    .map((seg) => {
-      const assign = ensureEffectAssignment(seg.id);
-      const audio = seg.audio || defaultSegmentAudio();
-      return `<tr data-segid="${seg.id}">
-        <td>${seg.name || seg.id}</td>
-        <td>
-          <select class="effect-field" data-field="engine" data-segid="${seg.id}">
-            <option value="wled" ${assign.engine === "wled" ? "selected" : ""}>WLED</option>
-            <option value="ledfx" ${assign.engine === "ledfx" ? "selected" : ""}>LedFx</option>
-          </select>
-        </td>
-        <td><input class="effect-field" list="effectCatalog" data-field="effect" data-segid="${seg.id}" value="${assign.effect || ""}"></td>
-        <td><input class="effect-field" data-field="preset" data-segid="${seg.id}" value="${assign.preset || ""}"></td>
-        <td><input type="number" min="0" max="255" class="effect-field" data-field="brightness" data-segid="${seg.id}" value="${assign.brightness ?? 255}"></td>
-        <td><input type="number" min="0" max="255" class="effect-field" data-field="intensity" data-segid="${seg.id}" value="${assign.intensity ?? 128}"></td>
-        <td><input type="number" min="0" max="255" class="effect-field" data-field="speed" data-segid="${seg.id}" value="${assign.speed ?? 128}"></td>
-        <td>
-          <select class="effect-field" data-field="audio_mode" data-segid="${seg.id}">
-            ${renderAudioModeOptions(assign.audio_mode)}
-          </select>
-        </td>
-        <td>
-          <select class="effect-field" data-field="audio_profile" data-segid="${seg.id}">
-            ${renderAudioProfileOptions(assign.audio_profile)}
-          </select>
-        </td>
-        <td>
-          <label class="switch compact">
-            <input type="checkbox" class="effect-field" data-field="audio_link" data-segid="${seg.id}" ${assign.audio_link ? "checked" : ""}>
-            <span></span>
-          </label>
-        </td>
-        <td>
-          <label class="switch compact">
-            <input type="checkbox" class="audio-field" data-field="stereo_split" data-segid="${seg.id}" ${audio.stereo_split ? "checked" : ""}>
-            <span></span>
-          </label>
-        </td>
-        <td><input type="number" step="0.05" class="audio-field" data-field="gain_left" data-segid="${seg.id}" value="${audio.gain_left ?? 1}"></td>
-        <td><input type="number" step="0.05" class="audio-field" data-field="gain_right" data-segid="${seg.id}" value="${audio.gain_right ?? 1}"></td>
-        <td><input type="number" step="0.05" class="audio-field" data-field="sensitivity" data-segid="${seg.id}" value="${audio.sensitivity ?? 0.85}"></td>
-        <td><input type="number" min="0" max="1" step="0.01" class="audio-field" data-field="threshold" data-segid="${seg.id}" value="${audio.threshold ?? 0.05}"></td>
-        <td><input type="number" min="0" max="1" step="0.01" class="audio-field" data-field="smoothing" data-segid="${seg.id}" value="${audio.smoothing ?? 0.65}"></td>
-      </tr>`;
+  const physical = (state.config?.led_engine?.segments || []).map((s) => ({ id: s.id, name: s.name || s.id }));
+  const wled = (state.config?.wled_devices || []).map((d) => ({ id: d.id || d.address, name: d.name || d.id || d.address }));
+  const renderMember = (m, segIdx, memberIdx) => {
+    const options =
+      `<option value="">${t("pin_select") || "Select target"}</option>` +
+      physical.map((p) => `<option value="physical:${p.id}" ${m.type === "physical" && m.id === p.id ? "selected" : ""}>${p.name} (physical)</option>`).join("") +
+      wled.map((d) => `<option value="wled:${d.id}" ${m.type === "wled" && m.id === d.id ? "selected" : ""}>${d.name} (WLED)</option>`).join("");
+    return `
+      <div class="virtual-member" data-virtual="${segIdx}" data-member="${memberIdx}">
+        <select class="virtual-member-target">
+          ${options}
+        </select>
+        <label>${t("wled_segment_index") || "Segment"} <input type="number" min="0" class="virtual-member-seg" value="${m.segment_index ?? 0}"></label>
+        <label>Start <input type="number" min="0" class="virtual-member-start" value="${m.start ?? 0}"></label>
+        <label>Length <input type="number" min="0" class="virtual-member-length" value="${m.length ?? 0}"></label>
+        <button type="button" class="ghost small danger" data-action="remove-virtual-member">&times;</button>
+      </div>
+    `;
+  };
+  container.innerHTML = segments
+    .map((seg, idx) => {
+      const members = seg.members.map((m, mIdx) => renderMember(m, idx, mIdx)).join("");
+      return `
+        <div class="virtual-card" data-virtual="${idx}">
+          <div class="virtual-header">
+            <input class="virtual-name" value="${seg.name || ""}" placeholder="Name">
+            <input class="virtual-id" value="${seg.id || ""}" placeholder="ID">
+            <label class="switch compact">
+              <input type="checkbox" class="virtual-enabled" ${seg.enabled !== false ? "checked" : ""}>
+              <span></span>
+            </label>
+            <button type="button" class="ghost small danger" data-action="remove-virtual">&times;</button>
+          </div>
+          <div class="virtual-members">
+            ${members || `<div class="placeholder muted">${t("wled_empty_hint") || "No members"}</div>`}
+          </div>
+          <div class="form-actions start">
+            <button type="button" class="ghost small" data-action="add-virtual-member" data-virtual="${idx}">Add member</button>
+          </div>
+        </div>
+      `;
     })
     .join("");
-  body.innerHTML = rows;
-  const segIds = led.segments.map((s) => s.id);
-  if (!state.selectedFxSegment || !segIds.includes(state.selectedFxSegment)) {
-    state.selectedFxSegment = segIds[0] || null;
+}
+
+function addVirtualSegment() {
+  ensureVirtualSegments();
+  state.config.virtual_segments.push(createVirtualSegmentTemplate());
+  renderVirtualSegments();
+}
+
+function addVirtualMember(segIdx) {
+  ensureVirtualSegments();
+  const seg = state.config.virtual_segments[segIdx];
+  if (!seg) return;
+  seg.members.push({ type: "physical", id: "", segment_index: 0, start: 0, length: 0 });
+  renderVirtualSegments();
+}
+
+function removeVirtualSegment(segIdx) {
+  ensureVirtualSegments();
+  state.config.virtual_segments.splice(segIdx, 1);
+  renderVirtualSegments();
+}
+
+function removeVirtualMember(segIdx, memberIdx) {
+  ensureVirtualSegments();
+  const seg = state.config.virtual_segments[segIdx];
+  if (!seg || !seg.members) return;
+  seg.members.splice(memberIdx, 1);
+  renderVirtualSegments();
+}
+
+function handleVirtualListInput(event) {
+  const card = event.target.closest(".virtual-card");
+  if (!card) return;
+  const segIdx = parseInt(card.dataset.virtual, 10);
+  ensureVirtualSegments();
+  const seg = state.config.virtual_segments[segIdx];
+  if (!seg) return;
+  if (event.target.classList.contains("virtual-name")) {
+    seg.name = event.target.value;
+    return;
   }
-  highlightEffectSelection();
-  renderFxSegmentList();
-  renderFxDetail();
+  if (event.target.classList.contains("virtual-id")) {
+    seg.id = event.target.value;
+    return;
+  }
+  if (event.target.classList.contains("virtual-enabled")) {
+    seg.enabled = event.target.checked;
+    return;
+  }
+  if (event.target.classList.contains("virtual-member-target")) {
+    const val = event.target.value || "";
+    const [type, ref] = val.includes(":") ? val.split(":") : [seg.members?.type || "physical", val];
+    const memberIdx = parseInt(event.target.closest(".virtual-member")?.dataset.member || "0", 10);
+    const mem = seg.members[memberIdx];
+    if (mem) {
+      mem.type = type || "physical";
+      mem.id = ref || "";
+    }
+    return;
+  }
+  if (event.target.classList.contains("virtual-member-seg")) {
+    const memberIdx = parseInt(event.target.closest(".virtual-member")?.dataset.member || "0", 10);
+    const mem = seg.members[memberIdx];
+    if (mem) {
+      let val = parseInt(event.target.value, 10);
+      if (!Number.isFinite(val) || val < 0) val = 0;
+      mem.segment_index = val;
+      event.target.value = val;
+    }
+    return;
+  }
+  if (event.target.classList.contains("virtual-member-start")) {
+    const memberIdx = parseInt(event.target.closest(".virtual-member")?.dataset.member || "0", 10);
+    const mem = seg.members[memberIdx];
+    if (mem) {
+      let val = parseInt(event.target.value, 10);
+      if (!Number.isFinite(val) || val < 0) val = 0;
+      mem.start = val;
+      event.target.value = val;
+    }
+    return;
+  }
+  if (event.target.classList.contains("virtual-member-length")) {
+    const memberIdx = parseInt(event.target.closest(".virtual-member")?.dataset.member || "0", 10);
+    const mem = seg.members[memberIdx];
+    if (mem) {
+      let val = parseInt(event.target.value, 10);
+      if (!Number.isFinite(val) || val < 0) val = 0;
+      mem.length = val;
+      event.target.value = val;
+    }
+    return;
+  }
+}
+
+function handleVirtualListClick(event) {
+  const addBtn = event.target.closest("[data-action='add-virtual-member']");
+  if (addBtn) {
+    const segIdx = parseInt(addBtn.dataset.virtual || "0", 10);
+    addVirtualMember(segIdx);
+    return;
+  }
+  const removeSeg = event.target.closest("[data-action='remove-virtual']");
+  if (removeSeg) {
+    const segIdx = parseInt(removeSeg.closest(".virtual-card")?.dataset.virtual || "0", 10);
+    removeVirtualSegment(segIdx);
+    return;
+  }
+  const removeMember = event.target.closest("[data-action='remove-virtual-member']");
+  if (removeMember) {
+    const wrapper = removeMember.closest(".virtual-member");
+    const segIdx = parseInt(wrapper?.dataset.virtual || "0", 10);
+    const memberIdx = parseInt(wrapper?.dataset.member || "0", 10);
+    removeVirtualMember(segIdx, memberIdx);
+    return;
+  }
 }
 
 function setSelectedFxSegment(segId) {
@@ -2213,12 +2726,13 @@ function handleAudioFormChange() {
 async function saveLedConfig() {
   const led = ensureLedEngineConfig();
   if (!led) return;
+  ensureVirtualSegments();
   handleAudioFormChange();
   try {
     await fetch("/api/led/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ led_engine: state.config.led_engine }),
+      body: JSON.stringify({ led_engine: state.config.led_engine, virtual_segments: state.config.virtual_segments, wled_effects: state.config.wled_effects }),
     });
     notify(t("toast_led_saved"), "ok");
     refreshInfo();
@@ -2664,9 +3178,21 @@ function initEvents() {
   if (btnAddSegment) {
     btnAddSegment.addEventListener("click", addSegment);
   }
+  const btnAddVirtual = qs("btnAddVirtual");
+  if (btnAddVirtual) {
+    btnAddVirtual.addEventListener("click", addVirtualSegment);
+  }
   const btnSaveLed = qs("btnSaveLed");
   if (btnSaveLed) {
     btnSaveLed.addEventListener("click", saveLedConfig);
+  }
+  const btnSaveAudio = qs("btnSaveAudio");
+  if (btnSaveAudio) {
+    btnSaveAudio.addEventListener("click", saveLedConfig);
+  }
+  const btnSaveGlobal = qs("btnSaveGlobal");
+  if (btnSaveGlobal) {
+    btnSaveGlobal.addEventListener("click", saveLedConfig);
   }
   const defEngine = qs("defaultEffectEngine");
   if (defEngine) {
@@ -2737,6 +3263,12 @@ function initEvents() {
     const evt = el.type === "checkbox" ? "change" : "input";
     el.addEventListener(evt, handleHardwareFieldChange);
   });
+  const virtualList = qs("virtualList");
+  if (virtualList) {
+    virtualList.addEventListener("input", handleVirtualListInput);
+    virtualList.addEventListener("change", handleVirtualListInput);
+    virtualList.addEventListener("click", handleVirtualListClick);
+  }
 }
 
 window.addEventListener("DOMContentLoaded", () => {
