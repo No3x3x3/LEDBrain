@@ -23,6 +23,10 @@ public:
   esp_err_t set_brightness(uint8_t brightness);
   uint8_t brightness() const;
   bool enabled() const;
+  esp_err_t render_frame(const std::vector<uint8_t>& rgb,
+                         const LedSegmentConfig& segment,
+                         size_t start,
+                         size_t length);
 
 private:
   esp_err_t configure_driver(const LedHardwareConfig& cfg);

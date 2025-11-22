@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include <cstdint>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 class WledEffectsRuntime {
@@ -28,11 +29,15 @@ class WledEffectsRuntime {
                        const WledDeviceConfig& device,
                        const std::string& ip,
                        uint32_t frame_idx,
-                       uint8_t global_brightness);
+                       uint8_t global_brightness,
+                       uint16_t fps);
   std::vector<uint8_t> render_frame(const WledEffectBinding& binding,
                                     uint16_t led_count,
                                     uint32_t frame_idx,
-                                    uint8_t global_brightness);
+                                    uint8_t global_brightness,
+                                    uint16_t fps);
+  float apply_envelope(const std::string& key, float input, uint16_t fps, uint16_t attack_ms, uint16_t release_ms);
+  std::string envelope_key(const WledEffectBinding& binding) const;
 
   AppConfig* cfg_ref_{nullptr};
   LedEngineRuntime* led_runtime_{nullptr};
@@ -42,4 +47,5 @@ class WledEffectsRuntime {
   TaskHandle_t task_{nullptr};
   bool running_{false};
   uint8_t seq_{0};
+  std::unordered_map<std::string, float> envelope_state_;
 };
