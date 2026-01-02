@@ -41,7 +41,8 @@ static void _mdns_browse_send(mdns_browse_t *browse, mdns_if_t interface);
 #else
 // Define WIFI_EVENT as const char* when WiFi is disabled to avoid compilation errors
 // WIFI_EVENT from esp_wifi.h is a pointer to a string, not a string literal
-static const char* WIFI_EVENT = "WIFI_EVENT";
+// Note: This is only needed if WIFI_EVENT is used outside conditional blocks
+// Since all uses are in #if blocks that are disabled when WiFi is off, we don't define it
 #define WIFI_EVENT_STA_CONNECTED 0
 #define WIFI_EVENT_STA_DISCONNECTED 1
 #define WIFI_EVENT_AP_START 2
