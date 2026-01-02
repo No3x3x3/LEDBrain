@@ -209,11 +209,14 @@
                     <th id="colSegStart">Start</th>
                     <th id="colSegOrder">Render order</th>
                     <th id="colSegPin">Pin</th>
+                    <th id="colSegChipset">Chipset</th>
+                    <th id="colSegColorOrder">Color order</th>
                     <th id="colSegRmt">RMT</th>
                     <th id="colSegMatrix">Matrix</th>
                     <th id="colSegPower">Power (mA)</th>
                     <th id="colSegSource">Effect source</th>
                     <th id="colSegDirection">Reverse</th>
+                    <th id="colSegMirror">Mirror</th>
                     <th id="colSegEnabled">Enabled</th>
                     <th></th>
                   </tr>
@@ -475,6 +478,23 @@
           </div>
           <div class="form-hint" id="otaHint">Pulls the latest firmware from GitHub releases.</div>
           <div class="form-hint" id="otaStatus">OTA idle</div>
+          <hr style="margin: 1.5rem 0;">
+          <h4 style="margin-top: 0;">Upload firmware file</h4>
+          <div class="form-grid">
+            <label>
+              <input type="file" id="otaFileInput" accept=".bin" style="display: none;">
+              <button type="button" class="ghost" id="btnOtaSelectFile">Select firmware file</button>
+              <span id="otaFileName" class="muted" style="display: block; margin-top: 0.5rem;">No file selected</span>
+            </label>
+            <button type="button" class="primary" id="btnOtaUpload" disabled>Upload and install</button>
+          </div>
+          <div class="form-hint" id="otaUploadHint">Select a .bin file to upload and install firmware directly.</div>
+          <div id="otaUploadProgress" style="display: none; margin-top: 1rem;">
+            <div class="progress-bar">
+              <div class="progress-fill" id="otaProgressFill" style="width: 0%;"></div>
+            </div>
+            <div class="muted" id="otaProgressText" style="margin-top: 0.5rem;">0%</div>
+          </div>
         </article>
 
         <div class="card form-card">

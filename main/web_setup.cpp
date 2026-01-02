@@ -14,6 +14,8 @@
 #include "esp_app_format.h"
 #include "esp_ota_ops.h"
 #include "ota.hpp"
+#include "mqtt_ha.hpp"
+#include "snapclient_light.hpp"
 #include <string>
 #include <algorithm>
 #include <cctype>
@@ -487,6 +489,15 @@ static esp_err_t api_led_state_post(httpd_req_t* req) {
   if (s_led_runtime) {
     if (has_enabled) {
       s_led_runtime->set_enabled(value);
+      // Stop snapclient when effects are stopped to prevent unnecessary audio processing
+      // Start snapclient when effects are enabled and audio source is Snapcast
+      if (s_cfg && s_cfg->led_engine.audio.source == AudioSourceType::Snapcast) {
+        if (!value) {
+          snapclient_light_stop();
+        } else if (s_cfg->led_engine.audio.snapcast.enabled) {
+          snapclient_light_start(s_cfg->led_engine.audio.snapcast);
+        }
+      }
     }
     if (has_brightness) {
       s_led_runtime->set_brightness(brightness);
@@ -537,13 +548,214 @@ static esp_err_t api_ota(httpd_req_t* req) {
   return ESP_OK;
 }
 
+static esp_err_t api_ota_upload(httpd_req_t* req) {
+  // Check if OTA is already in progress
+  if (ota_in_progress()) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA already in progress");
+  }
+  
+  // Get Content-Type header
+  size_t content_type_len = httpd_req_get_hdr_value_len(req, "Content-Type");
+  if (content_type_len == 0) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing Content-Type");
+  }
+  
+  std::string content_type;
+  content_type.resize(content_type_len);
+  if (httpd_req_get_hdr_value_str(req, "Content-Type", &content_type[0], content_type_len + 1) != ESP_OK) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid Content-Type");
+  }
+  
+  // Check if it's multipart/form-data
+  if (content_type.find("multipart/form-data") == std::string::npos) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected multipart/form-data");
+  }
+  
+  // Extract boundary
+  std::string boundary;
+  size_t boundary_pos = content_type.find("boundary=");
+  if (boundary_pos != std::string::npos) {
+    boundary = content_type.substr(boundary_pos + 9);
+    // Remove quotes if present
+    if (boundary.front() == '"' && boundary.back() == '"') {
+      boundary = boundary.substr(1, boundary.length() - 2);
+    }
+  } else {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing boundary");
+  }
+  
+  // Start OTA upload
+  esp_err_t err = ota_start_upload();
+  if (err != ESP_OK) {
+    if (err == ESP_ERR_INVALID_STATE) {
+      return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA already in progress");
+    }
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start OTA");
+  }
+  
+  // Read body in chunks and parse multipart
+  const size_t chunk_size = 4096;
+  std::vector<char> buffer(chunk_size);
+  std::string boundary_marker = "--" + boundary;
+  std::string boundary_end = boundary_marker + "--";
+  std::string accumulated_data;
+  bool in_file_data = false;
+  size_t total_received = 0;
+  const size_t content_length = req->content_len;
+  
+  while (total_received < content_length) {
+    int recv_len = httpd_req_recv(req, buffer.data(), chunk_size);
+    if (recv_len <= 0) {
+      if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+        continue;
+      }
+      ESP_LOGE(TAG, "OTA upload: recv failed");
+      ota_finish_upload();  // This will abort
+      return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive failed");
+    }
+    
+    total_received += recv_len;
+    accumulated_data.append(buffer.data(), recv_len);
+    
+    // Process accumulated data
+    while (!accumulated_data.empty()) {
+      if (!in_file_data) {
+        // Look for start of file data (after boundary and headers)
+        size_t boundary_start = accumulated_data.find(boundary_marker);
+        if (boundary_start == std::string::npos) {
+          // Haven't found boundary yet, keep accumulating
+          if (accumulated_data.length() > 1024) {
+            // Too much data without boundary, something's wrong
+            ESP_LOGE(TAG, "OTA upload: boundary not found");
+            esp_ota_abort(s_ota_handle);
+            s_ota_handle = 0;
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid multipart data");
+          }
+          break;
+        }
+        
+        // Skip boundary and headers
+        size_t headers_end = accumulated_data.find("\r\n\r\n", boundary_start);
+        if (headers_end == std::string::npos) {
+          // Headers not complete yet
+          break;
+        }
+        
+        // Start of file data
+        size_t data_start = headers_end + 4;
+        accumulated_data = accumulated_data.substr(data_start);
+        in_file_data = true;
+        ESP_LOGI(TAG, "OTA upload: found file data start");
+      }
+      
+      if (in_file_data) {
+        // Look for end boundary
+        size_t boundary_pos = accumulated_data.find(boundary_marker);
+        if (boundary_pos != std::string::npos) {
+          // Write data before boundary
+          std::string file_data = accumulated_data.substr(0, boundary_pos);
+          // Remove trailing \r\n before boundary
+          while (file_data.length() >= 2 && file_data.substr(file_data.length() - 2) == "\r\n") {
+            file_data = file_data.substr(0, file_data.length() - 2);
+          }
+          if (!file_data.empty()) {
+            err = ota_write_data(file_data.data(), file_data.length());
+            if (err != ESP_OK) {
+              return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
+            }
+          }
+          // Done with file data
+          accumulated_data.clear();
+          in_file_data = false;
+          break;
+        } else {
+          // Check if we have enough data to write (keep some for boundary check)
+          if (accumulated_data.length() > boundary_marker.length() + 100) {
+            size_t write_len = accumulated_data.length() - boundary_marker.length() - 100;
+            err = ota_write_data(accumulated_data.data(), write_len);
+            if (err != ESP_OK) {
+              return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
+            }
+            accumulated_data = accumulated_data.substr(write_len);
+          } else {
+            // Not enough data, wait for more
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+  // Write any remaining data
+  if (in_file_data && !accumulated_data.empty()) {
+    // Remove trailing boundary if present
+    size_t boundary_pos = accumulated_data.find(boundary_marker);
+    if (boundary_pos != std::string::npos) {
+      std::string file_data = accumulated_data.substr(0, boundary_pos);
+      while (file_data.length() >= 2 && file_data.substr(file_data.length() - 2) == "\r\n") {
+        file_data = file_data.substr(0, file_data.length() - 2);
+      }
+      if (!file_data.empty()) {
+        err = ota_write_data(file_data.data(), file_data.length());
+        if (err != ESP_OK) {
+          return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
+        }
+      }
+    } else {
+      // Write all remaining data
+      err = ota_write_data(accumulated_data.data(), accumulated_data.length());
+      if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
+      }
+    }
+  }
+  
+  // Finish OTA upload (this will validate and reboot)
+  err = ota_finish_upload();
+  if (err != ESP_OK) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA finish failed");
+  }
+  
+  httpd_resp_sendstr(req, "OTA upload completed");
+  return ESP_OK;
+}
+
+static esp_err_t api_mqtt_test(httpd_req_t* req) {
+  if (!mqtt_handle()) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "MQTT not connected");
+  }
+  bool success = mqtt_test_connection();
+  if (success) {
+    httpd_resp_sendstr(req, "OK");
+  } else {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Test failed");
+  }
+  return ESP_OK;
+}
+
+static esp_err_t api_mqtt_sync(httpd_req_t* req) {
+  if (!mqtt_handle()) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "MQTT not connected");
+  }
+  if (!s_cfg) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Config not available");
+  }
+  bool success = mqtt_publish_ha_discovery(*s_cfg);
+  if (success) {
+    httpd_resp_sendstr(req, "OK");
+  } else {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Sync failed");
+  }
+  return ESP_OK;
+}
+
 void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime, WledEffectsRuntime* wled_runtime){
   s_cfg = &cfg;
   s_led_runtime = runtime;
   s_wled_fx_runtime = wled_runtime;
   httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
   server_config.uri_match_fn = httpd_uri_match_wildcard;
-  server_config.max_uri_handlers = 24;
+  server_config.max_uri_handlers = 27;
   httpd_handle_t server = nullptr;
   ESP_ERROR_CHECK(httpd_start(&server, &server_config));
 
@@ -590,6 +802,10 @@ void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime, WledEffectsRunt
   httpd_register_uri_handler(server, &u_led_state_post);
   httpd_uri_t u_ota = { .uri="/api/ota/update", .method=HTTP_POST, .handler=api_ota, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_ota);
+  httpd_uri_t u_mqtt_test = { .uri="/api/mqtt/test", .method=HTTP_POST, .handler=api_mqtt_test, .user_ctx=NULL };
+  httpd_register_uri_handler(server, &u_mqtt_test);
+  httpd_uri_t u_mqtt_sync = { .uri="/api/mqtt/sync", .method=HTTP_POST, .handler=api_mqtt_sync, .user_ctx=NULL };
+  httpd_register_uri_handler(server, &u_mqtt_sync);
 
   ESP_LOGI(TAG,"Web server started");
 }

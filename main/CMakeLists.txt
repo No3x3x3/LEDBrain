@@ -10,6 +10,7 @@ idf_component_register(
       "heartbeat.cpp"
       "wled_discovery.cpp"
       "wled_effects.cpp"
+      "ledfx_effects.cpp"
       "ota.cpp"
   INCLUDE_DIRS "."
   EMBED_FILES 

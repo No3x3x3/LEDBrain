@@ -741,6 +741,12 @@ bool decode_effect_assignment(EffectAssignment& assign, cJSON* entry, bool allow
   if (cJSON* shuffle = cJSON_GetObjectItem(entry, "beat_shuffle"); cJSON_IsBool(shuffle)) {
     assign.beat_shuffle = cJSON_IsTrue(shuffle);
   }
+  if (cJSON* freq_min = cJSON_GetObjectItem(entry, "freq_min"); cJSON_IsNumber(freq_min)) {
+    assign.freq_min = static_cast<float>(std::max(0.0, freq_min->valuedouble));
+  }
+  if (cJSON* freq_max = cJSON_GetObjectItem(entry, "freq_max"); cJSON_IsNumber(freq_max)) {
+    assign.freq_max = static_cast<float>(std::max(0.0, freq_max->valuedouble));
+  }
   return true;
 }
 
@@ -787,6 +793,8 @@ cJSON* encode_effect_assignment(const EffectAssignment& assign, bool include_seg
   cJSON_AddStringToObject(a, "scene_preset", assign.scene_preset.c_str());
   cJSON_AddStringToObject(a, "scene_schedule", assign.scene_schedule.c_str());
   cJSON_AddBoolToObject(a, "beat_shuffle", assign.beat_shuffle);
+  cJSON_AddNumberToObject(a, "freq_min", assign.freq_min);
+  cJSON_AddNumberToObject(a, "freq_max", assign.freq_max);
   return a;
 }
 

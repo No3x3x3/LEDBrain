@@ -1,10 +1,12 @@
 #include "wled_effects.hpp"
+#include "ledfx_effects.hpp"
 #include "ddp_tx.hpp"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_engine/audio_pipeline.hpp"
 #include "wled_discovery.hpp"
+#include "esp_random.h"
 #include <algorithm>
 #include <cmath>
 #include <cctype>
@@ -266,12 +268,16 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     brightness = 0.01f;
   }
 
+  // Audio reactivity: ONLY for LEDFx effects, NOT for WLED effects
+  // For LEDFx effects, you can set which frequency range to react to (kick, bass, mids, treble, or custom range)
+  // This works for both WLED devices (via DDP) and local physical segments
   float audio_mod = 1.0f;
-  AudioMetrics metrics{};
-  if (binding.effect.audio_link) {
-    metrics = led_audio_get_metrics();
-  }
-  if (binding.effect.audio_link) {
+  const std::string engine = lower_copy(binding.effect.engine);
+  const bool is_ledfx = (engine == "ledfx");
+  
+  // Only process audio for LEDFx effects
+  if (binding.effect.audio_link && is_ledfx) {
+    AudioMetrics metrics = led_audio_get_metrics();
     float energy = metrics.energy;
     const std::string channel = lower_copy(binding.audio_channel);
     if (channel == "left") {
@@ -283,30 +289,45 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
       energy = 0.35f + 0.35f * (sinf(frame_idx * 0.15f) * 0.5f + 0.5f);
     }
     const float beat = metrics.beat > 0.0f ? metrics.beat : (sinf(frame_idx * 0.12f) * 0.5f + 0.5f);
-    float bass = metrics.bass > 0.0f ? metrics.bass : energy * 0.8f;
-    float treble = metrics.treble > 0.0f ? metrics.treble : energy * 0.6f;
-    float mid = metrics.mid > 0.0f ? metrics.mid : energy * 0.7f;
-
-    // Apply band gains
-    bass *= binding.effect.band_gain_low;
-    mid *= binding.effect.band_gain_mid;
-    treble *= binding.effect.band_gain_high;
-
+    
     float weighted = 0.0f;
-    const std::string reactive = lower_copy(binding.effect.reactive_mode);
-    if (reactive == "bass") {
-      weighted = bass;
-    } else if (reactive == "mids") {
-      weighted = mid;
-    } else if (reactive == "treble") {
-      weighted = treble;
+    // Check if custom frequency range is set (freq_min > 0 && freq_max > 0)
+    if (binding.effect.freq_min > 0.0f && binding.effect.freq_max > 0.0f) {
+      // Use custom frequency range
+      weighted = led_audio_get_custom_energy(binding.effect.freq_min, binding.effect.freq_max);
+      if (weighted <= 0.0001f) {
+        weighted = energy * 0.7f;  // Fallback to overall energy
+      }
     } else {
-      weighted = (energy * 0.4f + mid * 0.25f + bass * 0.2f + treble * 0.15f);
+      // Use default frequency bands (bass, mid, treble)
+      float bass = metrics.bass > 0.0f ? metrics.bass : energy * 0.8f;
+      float treble = metrics.treble > 0.0f ? metrics.treble : energy * 0.6f;
+      float mid = metrics.mid > 0.0f ? metrics.mid : energy * 0.7f;
+
+      // Apply band gains
+      bass *= binding.effect.band_gain_low;
+      mid *= binding.effect.band_gain_mid;
+      treble *= binding.effect.band_gain_high;
+
+      const std::string reactive = lower_copy(binding.effect.reactive_mode);
+      if (reactive == "kick") {
+        // Kick: focus on very low frequencies (sub-bass) and beat detection
+        // Use bass with emphasis on beat detection for kick drum response
+        weighted = (bass * 1.2f * 0.7f + beat * 0.3f);  // Emphasize bass and beat
+      } else if (reactive == "bass") {
+        weighted = bass;
+      } else if (reactive == "mids") {
+        weighted = mid;
+      } else if (reactive == "treble") {
+        weighted = treble;
+      } else {
+        // Full spectrum (default)
+        weighted = (energy * 0.4f + mid * 0.25f + bass * 0.2f + treble * 0.15f);
+      }
     }
     weighted *= (0.6f + beat * 0.4f);
-    const float profile_gain = binding.effect.audio_profile == "wled_bass_boost" ? 1.4f
-                             : binding.effect.audio_profile == "wled_reactive" ? 1.2f
-                             : binding.effect.audio_profile == "ledfx_energy" ? 1.1f
+    const float profile_gain = binding.effect.audio_profile == "ledfx_energy" ? 1.1f
+                             : binding.effect.audio_profile == "ledfx_tempo" ? 1.05f
                              : 1.0f;
     audio_mod = clamp01(0.4f + weighted * 0.8f * profile_gain);
     audio_mod *= binding.effect.amplitude_scale > 0.0f ? binding.effect.amplitude_scale : 1.0f;
@@ -319,11 +340,32 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     }
   }
 
-  // Attack/release envelope to smooth out audio reactivity
-  if (binding.effect.audio_link && (binding.effect.attack_ms > 0 || binding.effect.release_ms > 0) && fps > 0) {
+  // Attack/release envelope to smooth out audio reactivity (only for LEDFx)
+  if (binding.effect.audio_link && is_ledfx && (binding.effect.attack_ms > 0 || binding.effect.release_ms > 0) && fps > 0) {
     audio_mod = apply_envelope(envelope_key(binding), audio_mod, fps, binding.effect.attack_ms, binding.effect.release_ms);
   }
 
+  // Check if this is a LEDFx effect
+  if (is_ledfx) {
+    // Convert gradient to LEDFx format
+    std::vector<ledfx_effects::GradientStop> ledfx_gradient;
+    for (const auto& stop : gradient) {
+      ledfx_gradient.push_back({stop.pos, {stop.color.r, stop.color.g, stop.color.b}});
+    }
+    ledfx_effects::Rgb ledfx_c1{c1.r, c1.g, c1.b};
+    ledfx_effects::Rgb ledfx_c2{c2.r, c2.g, c2.b};
+    ledfx_effects::Rgb ledfx_c3{c3.r, c3.g, c3.b};
+    
+    const float speed = 0.02f + (binding.effect.speed / 255.0f) * 0.25f;
+    const float intensity = binding.effect.intensity / 255.0f;
+    const float direction = lower_copy(binding.effect.direction) == "reverse" ? -1.0f : 1.0f;
+    
+    return ledfx_effects::render_effect(binding.effect.effect, binding.effect, led_count, frame_idx,
+                                        global_brightness, fps, ledfx_gradient, ledfx_c1, ledfx_c2, ledfx_c3,
+                                        brightness, audio_mod, speed, intensity, direction);
+  }
+
+  // WLED effects
   const std::string effect_name = lower_copy(binding.effect.effect);
   const float speed = 0.02f + (binding.effect.speed / 255.0f) * 0.25f;
   const float intensity = binding.effect.intensity / 255.0f;
@@ -337,9 +379,10 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
       const float r = sinf((x) * 6.2831f) * 0.5f + 0.5f;
       const float g = sinf((x + 0.33f) * 6.2831f) * 0.5f + 0.5f;
       const float b = sinf((x + 0.66f) * 6.2831f) * 0.5f + 0.5f;
-      *dst++ = to_byte(r * brightness * audio_mod);
-      *dst++ = to_byte(g * brightness * audio_mod);
-      *dst++ = to_byte(b * brightness * audio_mod);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(r * brightness);
+      *dst++ = to_byte(g * brightness);
+      *dst++ = to_byte(b * brightness);
     }
     return frame;
   }
@@ -351,13 +394,328 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
       const float phase = frame_idx * speed * 0.25f + pos * 0.5f * direction;
       const float sample_pos = phase - std::floor(phase);
       const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, sample_pos);
-      *dst++ = to_byte(base.r * brightness * pulse * audio_mod);
-      *dst++ = to_byte(base.g * brightness * pulse * audio_mod);
-      *dst++ = to_byte(base.b * brightness * pulse * audio_mod);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(base.r * brightness * pulse);
+      *dst++ = to_byte(base.g * brightness * pulse);
+      *dst++ = to_byte(base.b * brightness * pulse);
     }
     return frame;
   }
 
+  // Energy / Spectrum visualization (LEDFx style)
+  if (effect_name.find("energy") != std::string::npos || effect_name.find("spectrum") != std::string::npos) {
+    AudioMetrics metrics = led_audio_get_metrics();
+    const float energy_scale = binding.effect.audio_link ? audio_mod : 0.5f + 0.5f * sinf(frame_idx * 0.1f);
+    const float center = pixels * 0.5f;
+    const float spread = pixels * 0.4f * intensity;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const float dist_from_center = std::abs(static_cast<float>(i) - center) / spread;
+      // WLED effects are not audio-reactive - use time-based animation
+      const float level = std::max(0.0f, energy_scale * (1.0f - dist_from_center));
+      
+      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Beat Pulse effect (WLED style - NOT audio-reactive)
+  if (effect_name.find("beat") != std::string::npos && effect_name.find("pulse") != std::string::npos) {
+    // WLED effects are not audio-reactive - use time-based animation
+    const float beat_strength = 0.5f + 0.5f * sinf(frame_idx * 0.2f);
+    const float pulse = 0.3f + beat_strength * 0.7f;
+    const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, 0.5f);
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(base.r * brightness * pulse);
+      *dst++ = to_byte(base.g * brightness * pulse);
+      *dst++ = to_byte(base.b * brightness * pulse);
+    }
+    return frame;
+  }
+
+  // Beat Bars - spectrum bars reacting to audio
+  if (effect_name.find("beat") != std::string::npos && effect_name.find("bar") != std::string::npos) {
+    AudioMetrics metrics = led_audio_get_metrics();
+    const uint16_t bar_count = std::max<uint16_t>(8, pixels / 8);
+    const float bar_width = static_cast<float>(pixels) / bar_count;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const uint16_t bar_idx = static_cast<uint16_t>(pos * bar_count);
+      const float bar_pos = (pos * bar_count) - bar_idx;
+      
+      // WLED effects are not audio-reactive - use time-based animation
+      const float level = 0.5f + 0.5f * sinf((frame_idx * 0.1f) + (bar_idx * 0.5f));
+      
+      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Power+ / Energy Flow (WLED style - NOT audio-reactive)
+  if (effect_name.find("power") != std::string::npos || effect_name.find("energy") != std::string::npos) {
+    // WLED effects are not audio-reactive - use time-based animation
+    const float energy_val = 0.5f + 0.5f * sinf(frame_idx * 0.15f);
+    const float move = frame_idx * speed * 0.8f * direction;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      float t = pos + move;
+      t = t - std::floor(t);
+      
+      // Energy beam effect
+      const float beam_width = 0.15f;
+      const float dist = std::min(t, 1.0f - t) * 2.0f;
+      float level = (dist < beam_width) ? (1.0f - dist / beam_width) * energy_val : 0.0f;
+      level = std::pow(level, 0.5f);  // Gamma correction
+      
+      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, t);
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Fire 2012 effect (WLED classic)
+  if (effect_name.find("fire") != std::string::npos && effect_name.find("2012") != std::string::npos) {
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const float fire_base = pos * 2.0f - 1.0f;
+      const float fire_height = 1.0f - std::abs(fire_base);
+      
+      const float noise1 = sinf((frame_idx * speed * 0.2f) + (pos * 6.0f)) * 0.5f + 0.5f;
+      const float noise2 = sinf((frame_idx * speed * 0.3f) + (pos * 10.0f)) * 0.3f + 0.7f;
+      const float fire_noise = (noise1 * 0.6f + noise2 * 0.4f);
+      
+      float fire_level = fire_height * fire_noise * intensity;
+      fire_level = std::max(0.0f, std::min(1.0f, fire_level));
+      
+      Rgb fire_color;
+      if (fire_level < 0.4f) {
+        fire_color = {fire_level * 2.5f, fire_level * 0.5f, 0.0f};
+      } else {
+        const float t = (fire_level - 0.4f) / 0.6f;
+        fire_color = {1.0f, 0.3f + t * 0.4f, t * 0.2f};
+      }
+      
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(fire_color.r * brightness);
+      *dst++ = to_byte(fire_color.g * brightness);
+      *dst++ = to_byte(fire_color.b * brightness);
+    }
+    return frame;
+  }
+
+  // Meteor effect (WLED)
+  if (effect_name.find("meteor") != std::string::npos && effect_name.find("smooth") == std::string::npos) {
+    const float move = frame_idx * speed * 0.6f * direction;
+    const float meteor_count = 1.0f + intensity * 2.0f;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      float level = 0.0f;
+      
+      for (float m = 0.0f; m < meteor_count; m += 1.0f) {
+        const float meteor_pos = std::fmod(move + m / meteor_count, 1.0f);
+        const float dist = std::abs(pos - meteor_pos);
+        if (dist < 0.2f) {
+          const float fade = 1.0f - (dist / 0.2f);
+          level = std::max(level, fade * fade);
+        }
+      }
+      
+      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Meteor Smooth effect (WLED)
+  if (effect_name.find("meteor") != std::string::npos && effect_name.find("smooth") != std::string::npos) {
+    const float move = frame_idx * speed * 0.5f * direction;
+    const float meteor_count = 1.0f + intensity * 2.0f;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      float level = 0.0f;
+      
+      for (float m = 0.0f; m < meteor_count; m += 1.0f) {
+        const float meteor_pos = std::fmod(move + m / meteor_count, 1.0f);
+        const float dist = std::abs(pos - meteor_pos);
+        if (dist < 0.3f) {
+          const float fade = 1.0f - (dist / 0.3f);
+          level = std::max(level, fade);  // Linear fade for smooth
+        }
+      }
+      
+      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Ripple effect (WLED - single ripple, not Ripple Flow, NOT audio-reactive)
+  if (effect_name.find("ripple") != std::string::npos && effect_name.find("flow") == std::string::npos) {
+    static std::vector<float> ripples;
+    if (ripples.size() != pixels) {
+      ripples.resize(pixels, 0.0f);
+    }
+    
+    // WLED effects are not audio-reactive - use time-based ripple generation
+    const float simulated_beat = 0.5f + 0.5f * sinf(frame_idx * 0.2f);
+    if (simulated_beat > 0.5f) {
+      const float center = static_cast<float>(esp_random()) / 0xFFFFFFFF;
+      ripples[static_cast<size_t>(center * pixels)] = 1.0f;
+    }
+    
+    const float ripple_speed = speed * 0.05f;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      float level = 0.0f;
+      for (size_t r = 0; r < ripples.size(); ++r) {
+        if (ripples[r] > 0.0f) {
+          const float dist = std::abs(static_cast<float>(i) - static_cast<float>(r)) / static_cast<float>(pixels);
+          const float radius = ripples[r];
+          if (std::abs(dist - radius) < 0.1f) {
+            level = std::max(level, (1.0f - radius) * 0.8f);
+          }
+          ripples[r] += ripple_speed;
+          if (ripples[r] > 1.0f) {
+            ripples[r] = 0.0f;
+          }
+        }
+      }
+      
+      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, static_cast<float>(i) / pixels);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Chase / Theater chase (WLED - NOT audio-reactive)
+  if (effect_name.find("chase") != std::string::npos || effect_name.find("theater") != std::string::npos) {
+    const float move = frame_idx * speed * 0.8f * direction;
+    const float spacing = 0.2f + (1.0f - intensity) * 0.3f;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const float phase = std::fmod(pos + move, spacing) / spacing;
+      const float level = (phase < 0.5f) ? (1.0f - phase * 2.0f) * 0.3f + 0.7f : 0.3f;
+      
+      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Scanner / Larson scanner (WLED - NOT audio-reactive)
+  if (effect_name.find("scanner") != std::string::npos) {
+    const float move = frame_idx * speed * 0.5f * direction;
+    const float center = std::fmod(move, 2.0f) - 1.0f;  // -1 to 1
+    const float width = 0.15f + intensity * 0.1f;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = (static_cast<float>(i) / static_cast<float>(pixels)) * 2.0f - 1.0f;  // -1 to 1
+      const float dist = std::abs(pos - center);
+      float level = (dist < width) ? 1.0f - (dist / width) : 0.0f;
+      level = std::pow(level, 0.5f);  // Gamma
+      
+      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, (pos + 1.0f) * 0.5f);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Rain effect (WLED - basic rain, Rain (Dual) handled separately)
+  if (effect_name.find("rain") != std::string::npos && effect_name.find("dual") == std::string::npos) {
+    static std::vector<float> raindrops(pixels, 0.0f);
+    if (raindrops.size() != pixels) {
+      raindrops.resize(pixels, 0.0f);
+    }
+    
+    const float rain_speed = speed * 0.4f;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      if (raindrops[i] <= 0.0f && (static_cast<float>(esp_random()) / 0xFFFFFFFF) < 0.05f * intensity) {
+        raindrops[i] = 1.0f;
+      }
+      
+      if (raindrops[i] > 0.0f) {
+        raindrops[i] -= rain_speed * 0.02f;
+        if (raindrops[i] < 0.0f) {
+          raindrops[i] = 0.0f;
+        }
+      }
+      
+      const float level = raindrops[i] * intensity;
+      const Rgb base = gradient.empty() ? Rgb{0.2f, 0.4f, 0.8f} : sample_gradient(gradient, static_cast<float>(i) / pixels);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Rain (Dual) effect (WLED)
+  if (effect_name.find("rain") != std::string::npos && effect_name.find("dual") != std::string::npos) {
+    static std::vector<float> raindrops1(pixels, 0.0f);
+    static std::vector<float> raindrops2(pixels, 0.0f);
+    if (raindrops1.size() != pixels) {
+      raindrops1.resize(pixels, 0.0f);
+      raindrops2.resize(pixels, 0.0f);
+    }
+    
+    const float rain_speed = speed * 0.4f;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      if (raindrops1[i] <= 0.0f && (static_cast<float>(esp_random()) / 0xFFFFFFFF) < 0.03f * intensity) {
+        raindrops1[i] = 1.0f;
+      }
+      if (raindrops2[i] <= 0.0f && (static_cast<float>(esp_random()) / 0xFFFFFFFF) < 0.03f * intensity) {
+        raindrops2[i] = 1.0f;
+      }
+      
+      if (raindrops1[i] > 0.0f) {
+        raindrops1[i] -= rain_speed * 0.02f;
+        if (raindrops1[i] < 0.0f) raindrops1[i] = 0.0f;
+      }
+      if (raindrops2[i] > 0.0f) {
+        raindrops2[i] -= rain_speed * 0.025f;  // Slightly different speed
+        if (raindrops2[i] < 0.0f) raindrops2[i] = 0.0f;
+      }
+      
+      const float level = (raindrops1[i] + raindrops2[i]) * 0.5f * intensity;
+      const Rgb base = gradient.empty() ? Rgb{0.2f, 0.4f, 0.8f} : sample_gradient(gradient, static_cast<float>(i) / pixels);
+      // WLED effects are not audio-reactive - don't use audio_mod
+      *dst++ = to_byte(base.r * brightness * level);
+      *dst++ = to_byte(base.g * brightness * level);
+      *dst++ = to_byte(base.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Default: gradient flow
   const float move = frame_idx * speed * 0.5f * direction;
   for (uint16_t i = 0; i < pixels; ++i) {
     const float pos = static_cast<float>(i) / static_cast<float>(pixels);
@@ -380,9 +738,10 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
       base.b = base.b * mix_c2 + c3.b * 0.25f * mix_c3;
     }
     const float twinkle = 0.85f + (sinf((move + pos) * 10.0f) * 0.5f + 0.5f) * 0.15f * intensity;
-    *dst++ = to_byte(base.r * brightness * twinkle * audio_mod);
-    *dst++ = to_byte(base.g * brightness * twinkle * audio_mod);
-    *dst++ = to_byte(base.b * brightness * twinkle * audio_mod);
+    // WLED effects are not audio-reactive - don't use audio_mod
+    *dst++ = to_byte(base.r * brightness * twinkle);
+    *dst++ = to_byte(base.g * brightness * twinkle);
+    *dst++ = to_byte(base.b * brightness * twinkle);
   }
   return frame;
 }
@@ -435,7 +794,12 @@ void WledEffectsRuntime::task_loop() {
     const uint16_t fps = fx.target_fps == 0 ? 60 : std::clamp<uint16_t>(fx.target_fps, 1, 240);
     const TickType_t delay = pdMS_TO_TICKS(1000 / fps);
 
-    if (fx.bindings.empty() || devices_snapshot.empty()) {
+    // Continue even if no WLED devices - we may have local segments to render
+    const bool has_wled_bindings = !fx.bindings.empty() && !devices_snapshot.empty();
+    const bool has_local_segments = cfg_ref_ && led_runtime_ && !segments.empty();
+    const bool has_virtual_segments = !virtuals.empty();
+    
+    if (!has_wled_bindings && !has_local_segments && !has_virtual_segments) {
       vTaskDelay(pdMS_TO_TICKS(400));
       continue;
     }
@@ -445,6 +809,10 @@ void WledEffectsRuntime::task_loop() {
     }
 
     const auto status = wled_discovery_status();
+    
+    // Render effects for WLED devices (via DDP)
+    // This is the central controller: generates effects (WLED or LEDFx, audio-reactive if enabled) and sends to WLED devices
+    // Each WLED device can have its own effect assignment - effects react to music from Snapcast if audio_link=true
     for (const auto& binding : fx.bindings) {
       if (!binding.enabled || binding.device_id.empty()) {
         continue;
@@ -455,6 +823,45 @@ void WledEffectsRuntime::task_loop() {
         continue;
       }
       render_and_send(binding, dev, ip, frame_idx, global_brightness, fps);
+    }
+
+    // Render effects for local physical segments
+    // Physical LEDs can use WLED effects (for visual consistency with WLED devices) or LEDFx effects (audio-reactive)
+    // When audio is enabled (audio_link=true), effects react to music from Snapcast
+    // This is the central controller: generates effects and renders locally to physical LEDs
+    if (cfg_ref_ && led_runtime_) {
+      const auto& assignments = cfg_ref_->led_engine.effects.assignments;
+      for (const auto& seg : segments) {
+        if (!seg.enabled || seg.effect_source != "local") {
+          continue;
+        }
+        // Find effect assignment for this segment
+        auto it = std::find_if(assignments.begin(), assignments.end(),
+                               [&](const EffectAssignment& a) { return a.segment_id == seg.id; });
+        if (it == assignments.end()) {
+          continue;  // No effect assigned, skip
+        }
+        // Convert EffectAssignment to WledEffectBinding for rendering
+        // Support both WLED effects (for visual consistency) and LEDFx effects (audio-reactive)
+        // Both can be audio-reactive if audio_link=true
+        WledEffectBinding local_binding{};
+        local_binding.device_id = seg.id;
+        local_binding.segment_index = 0;
+        local_binding.enabled = true;
+        local_binding.ddp = false;  // Local rendering, not DDP
+        local_binding.audio_channel = "mix";
+        local_binding.effect = *it;
+        
+        // Render frame for this segment (works for both WLED and LEDFx effects)
+        // Audio reactivity is applied if audio_link=true (works for both WLED and LEDFx)
+        const auto frame = render_frame(local_binding, seg.led_count, frame_idx, global_brightness, fps);
+        if (!frame.empty()) {
+          const esp_err_t res = led_runtime_->render_frame(frame, seg, 0, seg.led_count);
+          if (res != ESP_OK) {
+            ESP_LOGD(TAG, "Local render error %s for segment %s", esp_err_to_name(res), seg.id.c_str());
+          }
+        }
+      }
     }
 
     // Virtual segments: render a single frame and distribute to members (WLED + physical)

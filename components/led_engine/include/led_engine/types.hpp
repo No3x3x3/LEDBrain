@@ -107,6 +107,9 @@ struct EffectAssignment {
   std::string scene_preset{};
   std::string scene_schedule{};
   bool beat_shuffle{false};
+  // Custom frequency range for audio reactivity (0 = use default bands)
+  float freq_min{0.0f};  // Minimum frequency in Hz (0 = use reactive_mode)
+  float freq_max{0.0f};  // Maximum frequency in Hz (0 = use reactive_mode)
 };
 
 struct VirtualSegmentMember {

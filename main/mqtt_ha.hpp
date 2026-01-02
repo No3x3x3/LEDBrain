@@ -14,3 +14,9 @@ void mqtt_stop();
 
 // Publikuje stan (np. ON/OFF) do HA
 void mqtt_publish_state(bool enabled);
+
+// Publikuje Home Assistant discovery message
+bool mqtt_publish_ha_discovery(const AppConfig& cfg);
+
+// Testuje połączenie MQTT (publikuje test message)
+bool mqtt_test_connection();

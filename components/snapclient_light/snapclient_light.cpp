@@ -113,24 +113,99 @@ void compute_metrics(const int16_t* pcm, size_t samples, uint32_t sample_rate, b
   };
 
   AudioMetrics metrics{};
-  metrics.energy = std::min(1.0f, (energy_l + energy_r) / std::max<size_t>(1, count));
-  metrics.energy_left = std::min(1.0f, energy_l / std::max<size_t>(1, count));
-  metrics.energy_right = std::min(1.0f, energy_r / std::max<size_t>(1, count));
-  metrics.bass = band_energy(20.0f, 180.0f) * 4.0f;
-  metrics.mid = band_energy(180.0f, 2000.0f) * 2.5f;
-  metrics.treble = band_energy(2000.0f, 12000.0f) * 2.0f;
+  metrics.energy = std::min(1.0f, sqrtf((energy_l + energy_r) / std::max<size_t>(1, count)));  // RMS instead of raw
+  metrics.energy_left = std::min(1.0f, sqrtf(energy_l / std::max<size_t>(1, count)));
+  metrics.energy_right = std::min(1.0f, sqrtf(energy_r / std::max<size_t>(1, count)));
+  
+  // More precise frequency bands (like LEDFx)
+  const float sub_bass = band_energy(20.0f, 60.0f);
+  const float bass_low = band_energy(60.0f, 120.0f);
+  const float bass_high = band_energy(120.0f, 250.0f);
+  metrics.bass = std::min(1.5f, (sub_bass * 6.0f + bass_low * 5.0f + bass_high * 4.0f) / 3.0f);
+  
+  const float mid_low = band_energy(250.0f, 500.0f);
+  const float mid_mid = band_energy(500.0f, 1000.0f);
+  const float mid_high = band_energy(1000.0f, 2000.0f);
+  metrics.mid = std::min(1.5f, (mid_low * 3.0f + mid_mid * 2.8f + mid_high * 2.5f) / 3.0f);
+  
+  const float treble_low = band_energy(2000.0f, 4000.0f);
+  const float treble_mid = band_energy(4000.0f, 8000.0f);
+  const float treble_high = band_energy(8000.0f, 12000.0f);
+  metrics.treble = std::min(1.5f, (treble_low * 2.2f + treble_mid * 2.0f + treble_high * 1.8f) / 3.0f);
 
+  // Improved beat detection - use bass energy changes and frequency analysis
   static float prev_energy = 0.0f;
-  const float delta = metrics.energy - prev_energy;
+  static float prev_bass = 0.0f;
+  static float beat_history[8] = {0.0f};
+  static size_t beat_history_idx = 0;
+  static uint64_t last_beat_us = 0;
+  static float beat_envelope = 0.0f;
+  
+  const float delta_energy = metrics.energy - prev_energy;
+  const float delta_bass = metrics.bass - prev_bass;
   prev_energy = metrics.energy;
-  float beat = 0.0f;
-  if (delta > 0.02f) {
-    beat = std::min(1.0f, delta * 10.0f);
+  prev_bass = metrics.bass;
+  
+  // Beat detection: look for sharp increases in bass (most reliable for beats)
+  const float bass_threshold = 0.15f;
+  const float bass_beat_strength = std::max(0.0f, delta_bass - bass_threshold) * 8.0f;
+  
+  // Also check overall energy spike
+  const float energy_spike = std::max(0.0f, delta_energy - 0.05f) * 5.0f;
+  
+  // Combine both with bass priority
+  float beat_trigger = std::min(1.0f, bass_beat_strength * 0.7f + energy_spike * 0.3f);
+  
+  const uint64_t now_us = esp_timer_get_time();
+  if (beat_trigger > 0.3f && (now_us - last_beat_us) > 100'000) {  // Min 100ms between beats
+    beat_history[beat_history_idx] = beat_trigger;
+    beat_history_idx = (beat_history_idx + 1) % 8;
+    last_beat_us = now_us;
+    beat_envelope = std::min(1.0f, beat_trigger);
   } else {
-    beat = std::max(0.0f, beat * 0.9f);
+    // Decay envelope
+    beat_envelope *= 0.88f;  // Smooth decay
   }
-  metrics.beat = beat;
-  metrics.tempo_bpm = 0.0f;
+  
+  // Calculate tempo from beat intervals
+  static uint64_t beat_times[16] = {0};
+  static size_t beat_time_idx = 0;
+  static bool beat_times_filled = false;
+  
+  if (beat_trigger > 0.5f) {
+    beat_times[beat_time_idx] = now_us;
+    beat_time_idx = (beat_time_idx + 1) % 16;
+    if (beat_time_idx == 0) beat_times_filled = true;
+  }
+  
+  float tempo_bpm = 0.0f;
+  if (beat_times_filled || beat_time_idx > 4) {
+    size_t count_valid = beat_times_filled ? 16 : beat_time_idx;
+    uint64_t total_interval = 0;
+    size_t intervals = 0;
+    for (size_t i = 1; i < count_valid; ++i) {
+      size_t prev_idx = (beat_time_idx + 15 - i) % 16;
+      size_t curr_idx = (beat_time_idx + 16 - i) % 16;
+      if (beat_times[curr_idx] > beat_times[prev_idx]) {
+        total_interval += (beat_times[curr_idx] - beat_times[prev_idx]);
+        intervals++;
+      }
+    }
+    if (intervals > 0) {
+      const float avg_interval_ms = (total_interval / static_cast<float>(intervals)) / 1000.0f;
+      if (avg_interval_ms > 0.0f) {
+        tempo_bpm = 60000.0f / avg_interval_ms;
+        tempo_bpm = std::max(60.0f, std::min(200.0f, tempo_bpm));  // Clamp to reasonable range
+      }
+    }
+  }
+  
+  metrics.beat = std::min(1.0f, beat_envelope);
+  metrics.tempo_bpm = tempo_bpm;
+  
+  // Store magnitude spectrum for custom frequency range calculations
+  metrics.magnitude_spectrum = magn;
+  metrics.sample_rate = sample_rate;
 
   led_audio_set_metrics(metrics);
 }

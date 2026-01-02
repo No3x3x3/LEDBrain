@@ -1,6 +1,7 @@
 #include "led_engine.hpp"
 #include "led_engine/audio_pipeline.hpp"
 #include "led_engine/pinout.hpp"
+#include "led_engine/rmt_driver.hpp"
 #include "esp_log.h"
 #include <algorithm>
 
@@ -66,12 +67,25 @@ esp_err_t LedEngineRuntime::configure_driver(const LedHardwareConfig& cfg) {
            cfg.parallel_outputs,
            cfg.enable_dma);
 
+  // Deinitialize old segments first
+  rmt_driver_deinit_all();
+
+  // Initialize RMT driver for each segment
   for (const auto& seg : cfg.segments) {
     if (!led_pin_is_allowed(seg.gpio)) {
       ESP_LOGW(TAG, "Segment %s pin %d nie moze byc uzyty", seg.name.c_str(), seg.gpio);
       status = ESP_ERR_INVALID_ARG;
       continue;
     }
+    
+    if (cfg.driver == LedDriverType::EspRmt) {
+      const esp_err_t rmt_err = rmt_driver_init_segment(seg);
+      if (rmt_err != ESP_OK) {
+        ESP_LOGW(TAG, "RMT init failed for segment %s: %s", seg.name.c_str(), esp_err_to_name(rmt_err));
+        status = rmt_err;
+      }
+    }
+    
     log_segment(seg);
   }
   return status;
@@ -135,13 +149,24 @@ esp_err_t LedEngineRuntime::render_frame(const std::vector<uint8_t>& rgb,
     return ESP_ERR_INVALID_SIZE;
   }
 
-  // TODO: integrate with real LED driver; for now just log to unblock virtual mapping work
+  // Render via RMT driver if configured
+  if (cfg_.driver == LedDriverType::EspRmt) {
+    const esp_err_t rmt_err = rmt_driver_render(segment, rgb, start, pixels);
+    if (rmt_err != ESP_OK) {
+      ESP_LOGW(TAG, "RMT render failed for segment %s: %s", segment.id.c_str(), esp_err_to_name(rmt_err));
+      return rmt_err;
+    }
+    return ESP_OK;
+  }
+
+  // Fallback: log if driver not implemented
   ESP_LOGD(TAG,
-           "Render hook segment=%s start=%u len=%u (bytes=%u)",
+           "Render hook segment=%s start=%u len=%u (bytes=%u) - driver %s not implemented",
            segment.id.c_str(),
            static_cast<unsigned>(start),
            static_cast<unsigned>(pixels),
-           static_cast<unsigned>(expected_bytes));
+           static_cast<unsigned>(expected_bytes),
+           driver_name(cfg_.driver));
   return ESP_OK;
 }
 

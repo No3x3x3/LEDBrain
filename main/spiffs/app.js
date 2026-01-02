@@ -14,6 +14,8 @@
   otaChecking: false,
   globalBrightness: 255,
   brightnessTimer: null,
+  refreshingInfo: false,
+  loadingWled: false,
 };
 
 const T = {};
@@ -74,50 +76,62 @@ const EFFECT_LIBRARY = [
   {
     category: "Ambient",
     effects: [
-      { name: "Rain", desc: "Falling drops with cool tones" },
-      { name: "Rain (Dual)", desc: "Dual-layer rain flow" },
-      { name: "Waves", desc: "Smooth rolling gradients" },
-      { name: "Plasma", desc: "Animated gradients" },
-      { name: "Aura", desc: "Soft ambient glow" },
-      { name: "Ripple Flow", desc: "Ripples moving across LEDs" },
-      { name: "Matrix", desc: "Matrix-style falling glyphs" },
+      { name: "Rain", desc: "Falling drops with cool tones", engine: "ledfx" },
+      { name: "Rain (Dual)", desc: "Dual-layer rain flow", engine: "wled" },
+      { name: "Waves", desc: "Smooth rolling gradients", engine: "ledfx" },
+      { name: "Plasma", desc: "Animated gradients", engine: "ledfx" },
+      { name: "Aura", desc: "Soft ambient glow", engine: "ledfx" },
+      { name: "Ripple Flow", desc: "Ripples moving across LEDs", engine: "ledfx" },
+      { name: "Matrix", desc: "Matrix-style falling glyphs", engine: "ledfx" },
     ],
   },
   {
     category: "Energy",
     effects: [
-      { name: "Power+", desc: "Punchy energy beams" },
-      { name: "Power Cycle", desc: "Cycled energy pulses" },
-      { name: "Energy Flow", desc: "Directional energy trails" },
-      { name: "Energy Burst", desc: "Short bursts, beat friendly" },
-      { name: "Energy Waves", desc: "Layered waves, fast" },
-      { name: "Hyperspace", desc: "Deep-space warp lines" },
+      { name: "Power+", desc: "Punchy energy beams", engine: "wled" },
+      { name: "Power Cycle", desc: "Cycled energy pulses", engine: "wled" },
+      { name: "Energy Flow", desc: "Directional energy trails", engine: "wled" },
+      { name: "Energy Burst", desc: "Short bursts, beat friendly", engine: "wled" },
+      { name: "Energy Waves", desc: "Layered waves, fast", engine: "wled" },
+      { name: "Hyperspace", desc: "Deep-space warp lines", engine: "ledfx" },
     ],
   },
   {
     category: "Rhythm",
     effects: [
-      { name: "Beat Pulse", desc: "Pulse on beat" },
-      { name: "Beat Bars", desc: "Bars scaled by beat" },
-      { name: "Beat Scatter", desc: "Beat-driven scatter" },
-      { name: "Beat Light", desc: "Simple beat flashes" },
-      { name: "Strobe", desc: "Hard strobe" },
+      { name: "Beat Pulse", desc: "Pulse on beat", engine: "wled" },
+      { name: "Beat Bars", desc: "Bars scaled by beat", engine: "wled" },
+      { name: "Beat Scatter", desc: "Beat-driven scatter", engine: "wled" },
+      { name: "Beat Light", desc: "Simple beat flashes", engine: "wled" },
+      { name: "Strobe", desc: "Hard strobe", engine: "wled" },
     ],
   },
   {
     category: "Classic",
     effects: [
-      { name: "Rainbow Runner", desc: "Fast rainbow runner" },
-      { name: "Rainbow Bands", desc: "Striped rainbow bands" },
-      { name: "Scanner", desc: "Larson scanner" },
-      { name: "Scanner Dual", desc: "Dual-direction scanner" },
-      { name: "Theater", desc: "Theater chase" },
-      { name: "Noise", desc: "Perlin noise" },
-      { name: "Fireworks", desc: "Bursts and sparks" },
-      { name: "Fire 2012", desc: "Classic fire" },
-      { name: "Heartbeat", desc: "Heartbeat pulse" },
-      { name: "Ripple", desc: "Single ripple" },
-      { name: "Rainbow", desc: "Rainbow loop" },
+      { name: "Solid", desc: "Solid color", engine: "wled" },
+      { name: "Blink", desc: "Blinking effect", engine: "wled" },
+      { name: "Breathe", desc: "Breathing pulse", engine: "wled" },
+      { name: "Chase", desc: "Chasing lights", engine: "wled" },
+      { name: "Colorloop", desc: "Color loop", engine: "wled" },
+      { name: "Rainbow", desc: "Rainbow loop", engine: "wled" },
+      { name: "Rainbow Runner", desc: "Fast rainbow runner", engine: "wled" },
+      { name: "Rainbow Bands", desc: "Striped rainbow bands", engine: "wled" },
+      { name: "Rain", desc: "Falling rain drops", engine: "wled" },
+      { name: "Meteor", desc: "Meteor shower", engine: "wled" },
+      { name: "Meteor Smooth", desc: "Smooth meteor shower", engine: "wled" },
+      { name: "Candle", desc: "Candle flicker", engine: "wled" },
+      { name: "Candle Multi", desc: "Multiple candle flickers", engine: "wled" },
+      { name: "Scanner", desc: "Larson scanner", engine: "wled" },
+      { name: "Scanner Dual", desc: "Dual-direction scanner", engine: "wled" },
+      { name: "Theater", desc: "Theater chase", engine: "wled" },
+      { name: "Noise", desc: "Perlin noise", engine: "wled" },
+      { name: "Sinelon", desc: "Sinelon effect", engine: "wled" },
+      { name: "Fireworks", desc: "Bursts and sparks", engine: "wled" },
+      { name: "Fire 2012", desc: "Classic fire", engine: "wled" },
+      { name: "Heartbeat", desc: "Heartbeat pulse", engine: "wled" },
+      { name: "Ripple", desc: "Single ripple", engine: "wled" },
+      { name: "Pacifica", desc: "Pacifica ocean waves", engine: "wled" },
     ],
   },
 ];
@@ -434,8 +448,28 @@ function stopAutoRefreshLoops() {
 
 function startAutoRefreshLoops() {
   stopAutoRefreshLoops();
-  state.timers.info = setInterval(() => refreshInfo(), INFO_REFRESH_MS);
-  state.timers.wled = setInterval(() => loadWledDevices(), WLED_REFRESH_MS);
+  // Throttle refreshInfo - nie wykonuj jeśli już trwa
+  const throttledRefreshInfo = throttle(() => {
+    if (!state.refreshingInfo) {
+      state.refreshingInfo = true;
+      refreshInfo().finally(() => {
+        state.refreshingInfo = false;
+      });
+    }
+  }, INFO_REFRESH_MS);
+  
+  // Throttle loadWledDevices - nie wykonuj jeśli już trwa
+  const throttledLoadWled = throttle(() => {
+    if (!state.loadingWled) {
+      state.loadingWled = true;
+      loadWledDevices().finally(() => {
+        state.loadingWled = false;
+      });
+    }
+  }, WLED_REFRESH_MS);
+  
+  state.timers.info = setInterval(throttledRefreshInfo, INFO_REFRESH_MS);
+  state.timers.wled = setInterval(throttledLoadWled, WLED_REFRESH_MS);
 }
 
 function startUptimeTicker() {
@@ -582,6 +616,31 @@ function clamp(val, min, max) {
   return Math.min(Math.max(val, min), max);
 }
 
+// Debounce helper - opóźnia wykonanie funkcji
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+// Throttle helper - ogranicza częstotliwość wykonania funkcji
+function throttle(func, limit) {
+  let inThrottle;
+  return function(...args) {
+    if (!inThrottle) {
+      func.apply(this, args);
+      inThrottle = true;
+      setTimeout(() => inThrottle = false, limit);
+    }
+  };
+}
+
 function syncBrightnessUi() {
   const slider = qs("brightnessGlobal");
   const label = qs("brightnessValue");
@@ -701,7 +760,10 @@ function buildPhysicalSegmentsSummary() {
         name: seg.name || seg.id,
         leds: seg.led_count || 0,
         gpio: seg.gpio,
-        engine: fx?.engine || led.effects?.default_engine || "",
+        engine: fx?.engine || (() => {
+          const meta = findEffectMeta(fx?.effect);
+          return meta?.engine || led.effects?.default_engine || "wled";
+        })(),
         effect: fx?.effect || "",
         audio_link: !!fx?.audio_link,
         enabled: seg.enabled !== false,
@@ -975,59 +1037,103 @@ function renderEffectDetailForm(target, segment, assignment) {
       <label>${t("colFxEngine") || "Engine"}
         <select id="devFxEngine">
           <option value="wled" ${assignment.engine === "wled" ? "selected" : ""}>WLED</option>
-          <option value="ledfx" ${assignment.engine === "ledfx" ? "selected" : ""}>LedFx</option>
+          <option value="ledfx" ${assignment.engine === "ledfx" ? "selected" : ""}>LEDFx</option>
         </select>
       </label>
       <label>${t("fx_effect_picker") || "Effect"}
-        <input list="effectCatalog" id="devFxEffect" value="${assignment.effect || ""}">
+        <input list="effectCatalog" id="devFxEffect" value="${assignment.effect || "Energy Flow"}">
+        <small class="muted" id="fxEffectDescription" style="display: block; margin-top: 0.25rem;"></small>
       </label>
       <label>${t("colFxPreset") || "Preset"}
-        <input id="devFxPreset" value="${assignment.preset || ""}">
+        <input id="devFxPreset" value="${assignment.preset || ""}" placeholder="Optional preset name">
       </label>
-      <label>${t("fx_color1") || "Color 1"}
-        <input type="color" id="devFxColor1" value="${assignment.color1 || "#ffffff"}">
+    </div>
+    <h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem;">${t("fx_colors_title") || "Colors & Appearance"}</h4>
+    <div class="form-grid">
+      <label>${t("fx_color1") || "Primary Color"}
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="color" id="devFxColor1" value="${assignment.color1 || "#ffffff}" style="width: 60px; height: 40px; border-radius: 8px;">
+          <input type="text" id="devFxColor1Text" value="${assignment.color1 || "#ffffff}" placeholder="#ffffff" style="flex: 1;">
+        </div>
       </label>
-      <label>${t("fx_color2") || "Color 2"}
-        <input type="color" id="devFxColor2" value="${assignment.color2 || "#ff6600"}">
+      <label>${t("fx_color2") || "Secondary Color"}
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="color" id="devFxColor2" value="${assignment.color2 || "#ff6600}" style="width: 60px; height: 40px; border-radius: 8px;">
+          <input type="text" id="devFxColor2Text" value="${assignment.color2 || "#ff6600}" placeholder="#ff6600" style="flex: 1;">
+        </div>
       </label>
-      <label>${t("fx_color3") || "Color 3"}
-        <input type="color" id="devFxColor3" value="${assignment.color3 || "#0033ff"}">
+      <label>${t("fx_color3") || "Tertiary Color"}
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="color" id="devFxColor3" value="${assignment.color3 || "#0033ff}" style="width: 60px; height: 40px; border-radius: 8px;">
+          <input type="text" id="devFxColor3Text" value="${assignment.color3 || "#0033ff}" placeholder="#0033ff" style="flex: 1;">
+        </div>
       </label>
+    </div>
+    <h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem;">${t("fx_controls_title") || "Effect Controls"}</h4>
+    <div class="form-grid">
       <label>${t("fx_brightness_override") || "Brightness"}
-        <input type="number" min="0" max="255" id="devFxBrightness" value="${assignment.brightness ?? 255}">
+        <div class="slider-shell">
+          <input type="range" min="0" max="255" id="devFxBrightness" value="${assignment.brightness ?? 255}">
+          <span class="slider-value" id="devFxBrightnessValue">${assignment.brightness ?? 255}</span>
+        </div>
       </label>
       <label>${t("colFxIntensity") || "Intensity"}
-        <input type="number" min="0" max="255" id="devFxIntensity" value="${assignment.intensity ?? 128}">
+        <div class="slider-shell">
+          <input type="range" min="0" max="255" id="devFxIntensity" value="${assignment.intensity ?? 128}">
+          <span class="slider-value" id="devFxIntensityValue">${assignment.intensity ?? 128}</span>
+        </div>
       </label>
       <label>${t("colFxSpeed") || "Speed"}
-        <input type="number" min="0" max="255" id="devFxSpeed" value="${assignment.speed ?? 128}">
+        <div class="slider-shell">
+          <input type="range" min="0" max="255" id="devFxSpeed" value="${assignment.speed ?? 128}">
+          <span class="slider-value" id="devFxSpeedValue">${assignment.speed ?? 128}</span>
+        </div>
+      </label>
+    </div>
+    <h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem;">${t("fx_audio_title") || "Audio Reactive"}</h4>
+    <div class="form-grid">
+      <label class="switch">
+        <input type="checkbox" id="devFxAudioLink" ${assignment.audio_link ? "checked" : ""} ${assignment.engine === "wled" ? "disabled" : ""}>
+        <span></span> ${t("colFxAudioLink") || "Enable audio reactivity"}
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only available for LEDFx effects</small>` : ""}
       </label>
       <label>${t("colFxAudioProfile") || "Audio profile"}
-        <select id="devFxAudioProfile">
+        <select id="devFxAudioProfile" ${assignment.engine === "wled" ? "disabled" : ""}>
           ${renderAudioProfileOptions(assignment.audio_profile || "default")}
         </select>
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : ""}
       </label>
       <label>${t("colFxAudioMode") || "Audio mode"}
-        <select id="devFxAudioMode">
+        <select id="devFxAudioMode" ${assignment.engine === "wled" ? "disabled" : ""}>
           ${renderAudioModeOptions(assignment.audio_mode || "spectrum")}
         </select>
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : ""}
       </label>
       <label>${t("fxReactiveMode") || "Reactive mode"}
-        <select id="devFxReactiveMode">
+        <select id="devFxReactiveMode" ${assignment.engine === "wled" ? "disabled" : ""}>
           <option value="full" ${assignment.reactive_mode === "full" ? "selected" : ""}>Full spectrum</option>
+          <option value="kick" ${assignment.reactive_mode === "kick" ? "selected" : ""}>Kick (bass + beat)</option>
           <option value="bass" ${assignment.reactive_mode === "bass" ? "selected" : ""}>Bass</option>
           <option value="mids" ${assignment.reactive_mode === "mids" ? "selected" : ""}>Mids</option>
           <option value="treble" ${assignment.reactive_mode === "treble" ? "selected" : ""}>Treble</option>
         </select>
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">Or use custom frequency range below</small>`}
       </label>
-      <label class="switch">
-        <input type="checkbox" id="devFxAudioLink" ${assignment.audio_link ? "checked" : ""}>
-        <span></span> ${t("colFxAudioLink") || "Audio link"}
+      <label>${t("fxFreqMin") || "Frequency min (Hz)"}
+        <input type="number" min="0" max="24000" step="10" id="devFxFreqMin" value="${assignment.freq_min || 0}" placeholder="0 = use reactive mode" ${assignment.engine === "wled" ? "disabled" : ""}>
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">0 = use reactive mode above</small>`}
       </label>
+      <label>${t("fxFreqMax") || "Frequency max (Hz)"}
+        <input type="number" min="0" max="24000" step="10" id="devFxFreqMax" value="${assignment.freq_max || 0}" placeholder="0 = use reactive mode" ${assignment.engine === "wled" ? "disabled" : ""}>
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">0 = use reactive mode above</small>`}
+      </label>
+    </div>
+    <h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem;">${t("fx_advanced_title") || "Advanced"}</h4>
+    <div class="form-grid">
       <label>${t("lblFxDirection") || "Direction"}
         <select id="devFxDirection">
           <option value="forward" ${assignment.direction === "forward" ? "selected" : ""}>Forward</option>
-          <option value="backward" ${assignment.direction === "backward" ? "selected" : ""}>Backward</option>
+          <option value="reverse" ${assignment.direction === "reverse" || assignment.direction === "backward" ? "selected" : ""}>Reverse</option>
           <option value="center_out" ${assignment.direction === "center_out" ? "selected" : ""}>Center out</option>
           <option value="edges_in" ${assignment.direction === "edges_in" ? "selected" : ""}>Edges in</option>
         </select>
@@ -1042,10 +1148,23 @@ function renderEffectDetailForm(target, segment, assignment) {
         <input type="number" id="devFxFadeOut" min="0" max="5000" value="${assignment.fade_out ?? 0}">
       </label>
       <label>${t("lblFxPalette") || "Palette"}
-        <input id="devFxPalette" value="${assignment.palette || ""}" placeholder="icy, sunset, fire">
+        <select id="devFxPalette">
+          <option value="" ${!assignment.palette ? "selected" : ""}>None (use colors)</option>
+          <option value="sunset" ${assignment.palette === "sunset" ? "selected" : ""}>Sunset</option>
+          <option value="fire" ${assignment.palette === "fire" ? "selected" : ""}>Fire</option>
+          <option value="icy" ${assignment.palette === "icy" ? "selected" : ""}>Icy</option>
+          <option value="forest" ${assignment.palette === "forest" ? "selected" : ""}>Forest</option>
+          <option value="ocean" ${assignment.palette === "ocean" ? "selected" : ""}>Ocean</option>
+          <option value="aqua" ${assignment.palette === "aqua" ? "selected" : ""}>Aqua</option>
+          <option value="party" ${assignment.palette === "party" ? "selected" : ""}>Party</option>
+        </select>
       </label>
       <label>${t("lblFxGradient") || "Gradient"}
-        <input id="devFxGradient" value="${assignment.gradient || ""}" placeholder="#000-#fff-#0ff">
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input id="devFxGradient" value="${assignment.gradient || ""}" placeholder="#000-#fff-#0ff" style="flex: 1;">
+          <button type="button" class="ghost small" id="btnGradientHelper" title="Gradient helper">?</button>
+        </div>
+        <small class="muted" style="display: block; margin-top: 0.25rem;">Format: #color1-#color2-#color3 (comma or dash separated)</small>
       </label>
       <label>${t("lblFxBrightnessOverride") || "Brightness override"}
         <input type="number" id="devFxBrightnessOverride" min="0" max="255" value="${assignment.brightness_override ?? 0}">
@@ -1103,7 +1222,7 @@ function renderEffectDetailForm(target, segment, assignment) {
         <span></span> ${t("lblFxBeatShuffle") || "Beat shuffle"}
       </label>
     </div>
-    <h4>${t("fx_audio_title") || "Audio reactive"}</h4>
+    <h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem;">${t("fx_audio_advanced_title") || "Audio Advanced"}</h4>
     <div class="form-grid">
       <label class="switch">
         <input type="checkbox" id="devAudioStereoSplit" ${audio.stereo_split ? "checked" : ""}>
@@ -1132,6 +1251,12 @@ function renderEffectDetailForm(target, segment, assignment) {
 
   qs("devFxEngine")?.addEventListener("change", (ev) => {
     assignment.engine = ev.target.value || assignment.engine;
+    // Disable audio reactivity for WLED effects
+    if (assignment.engine === "wled") {
+      assignment.audio_link = false;
+    }
+    // Re-render form to update disabled states
+    renderEffectDetailForm(qs("fxDetailForm"), null, assignment);
   });
   qs("devFxEffect")?.addEventListener("change", (ev) => {
     assignment.effect = ev.target.value || "";
@@ -1139,29 +1264,121 @@ function renderEffectDetailForm(target, segment, assignment) {
   qs("devFxPreset")?.addEventListener("change", (ev) => {
     assignment.preset = ev.target.value || "";
   });
-  qs("devFxColor1")?.addEventListener("change", (ev) => {
-    assignment.color1 = ev.target.value || assignment.color1;
-  });
-  qs("devFxColor2")?.addEventListener("change", (ev) => {
-    assignment.color2 = ev.target.value || assignment.color2;
-  });
-  qs("devFxColor3")?.addEventListener("change", (ev) => {
-    assignment.color3 = ev.target.value || assignment.color3;
-  });
-  [
-    ["devFxBrightness", "brightness", 0, 255],
-    ["devFxIntensity", "intensity", 0, 255],
-    ["devFxSpeed", "speed", 0, 255],
-  ].forEach(([id, field, min, max]) => {
-    const input = qs(id);
-    input?.addEventListener("change", (ev) => {
-      let val = parseInt(ev.target.value, 10);
-      if (!Number.isFinite(val)) val = min;
-      val = Math.max(min, Math.min(val, max));
-      assignment[field] = val;
-      ev.target.value = val;
+  // Color pickers with text inputs
+  const color1Picker = qs("devFxColor1");
+  const color1Text = qs("devFxColor1Text");
+  if (color1Picker && color1Text) {
+    color1Picker.addEventListener("change", (ev) => {
+      assignment.color1 = ev.target.value || assignment.color1;
+      color1Text.value = assignment.color1;
     });
+    color1Text.addEventListener("change", (ev) => {
+      const val = ev.target.value.trim();
+      if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+        assignment.color1 = val;
+        color1Picker.value = val;
+      }
+    });
+  }
+  
+  const color2Picker = qs("devFxColor2");
+  const color2Text = qs("devFxColor2Text");
+  if (color2Picker && color2Text) {
+    color2Picker.addEventListener("change", (ev) => {
+      assignment.color2 = ev.target.value || assignment.color2;
+      color2Text.value = assignment.color2;
+    });
+    color2Text.addEventListener("change", (ev) => {
+      const val = ev.target.value.trim();
+      if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+        assignment.color2 = val;
+        color2Picker.value = val;
+      }
+    });
+  }
+  
+  const color3Picker = qs("devFxColor3");
+  const color3Text = qs("devFxColor3Text");
+  if (color3Picker && color3Text) {
+    color3Picker.addEventListener("change", (ev) => {
+      assignment.color3 = ev.target.value || assignment.color3;
+      color3Text.value = assignment.color3;
+    });
+    color3Text.addEventListener("change", (ev) => {
+      const val = ev.target.value.trim();
+      if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+        assignment.color3 = val;
+        color3Picker.value = val;
+      }
+    });
+  }
+  
+  // Gradient helper button
+  qs("btnGradientHelper")?.addEventListener("click", () => {
+    const examples = [
+      "#ff0000-#00ff00-#0000ff",
+      "#000000-#ffffff",
+      "#ff6600-#0033ff",
+      "#ff00ff-#00ffff-#ffff00",
+    ];
+    const gradientInput = qs("devFxGradient");
+    if (gradientInput) {
+      const current = gradientInput.value.trim();
+      if (!current) {
+        gradientInput.value = examples[0];
+        assignment.gradient = examples[0];
+      } else {
+        alert(`Gradient format:\n${examples.join("\n")}\n\nSeparate colors with: comma, dash, semicolon, or space`);
+      }
+    }
   });
+  // Brightness slider with value display
+  const brightnessSlider = qs("devFxBrightness");
+  const brightnessValue = qs("devFxBrightnessValue");
+  if (brightnessSlider && brightnessValue) {
+    brightnessSlider.addEventListener("input", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      assignment.brightness = Math.max(0, Math.min(val, 255));
+      brightnessValue.textContent = assignment.brightness;
+    });
+    brightnessSlider.addEventListener("change", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      assignment.brightness = Math.max(0, Math.min(val, 255));
+      brightnessValue.textContent = assignment.brightness;
+    });
+  }
+  
+  // Intensity slider with value display
+  const intensitySlider = qs("devFxIntensity");
+  const intensityValue = qs("devFxIntensityValue");
+  if (intensitySlider && intensityValue) {
+    intensitySlider.addEventListener("input", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      assignment.intensity = Math.max(0, Math.min(val, 255));
+      intensityValue.textContent = assignment.intensity;
+    });
+    intensitySlider.addEventListener("change", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      assignment.intensity = Math.max(0, Math.min(val, 255));
+      intensityValue.textContent = assignment.intensity;
+    });
+  }
+  
+  // Speed slider with value display
+  const speedSlider = qs("devFxSpeed");
+  const speedValue = qs("devFxSpeedValue");
+  if (speedSlider && speedValue) {
+    speedSlider.addEventListener("input", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      assignment.speed = Math.max(0, Math.min(val, 255));
+      speedValue.textContent = assignment.speed;
+    });
+    speedSlider.addEventListener("change", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      assignment.speed = Math.max(0, Math.min(val, 255));
+      speedValue.textContent = assignment.speed;
+    });
+  }
   qs("devFxAudioProfile")?.addEventListener("change", (ev) => {
     assignment.audio_profile = ev.target.value || "default";
   });
@@ -1169,7 +1386,16 @@ function renderEffectDetailForm(target, segment, assignment) {
     assignment.audio_mode = ev.target.value || "spectrum";
   });
   qs("devFxAudioLink")?.addEventListener("change", (ev) => {
-    assignment.audio_link = ev.target.checked;
+    const assign = getSelectedFxAssignment();
+    if (!assign) return;
+    // Only allow audio reactivity for LEDFx effects
+    if (assign.engine === "wled") {
+      ev.target.checked = false;
+      assign.audio_link = false;
+      notify("Audio reactivity is only available for LEDFx effects", "warn");
+      return;
+    }
+    assign.audio_link = ev.target.checked;
   });
   qs("devFxReactiveMode")?.addEventListener("change", (ev) => {
     assignment.reactive_mode = ev.target.value || "full";
@@ -1177,10 +1403,16 @@ function renderEffectDetailForm(target, segment, assignment) {
   qs("devFxDirection")?.addEventListener("change", (ev) => {
     assignment.direction = ev.target.value || "forward";
   });
-  qs("devFxScatter")?.addEventListener("input", (ev) => {
-    const val = parseFloat(ev.target.value);
-    assignment.scatter = Number.isFinite(val) ? val : assignment.scatter;
-  });
+  // Scatter slider with value display
+  const scatterSlider = qs("devFxScatter");
+  const scatterValue = qs("devFxScatterValue");
+  if (scatterSlider && scatterValue) {
+    scatterSlider.addEventListener("input", (ev) => {
+      const val = parseFloat(ev.target.value);
+      assignment.scatter = Number.isFinite(val) ? Math.max(0, Math.min(val, 100)) : assignment.scatter;
+      scatterValue.textContent = Math.round(assignment.scatter);
+    });
+  }
   qs("devFxFadeIn")?.addEventListener("input", (ev) => {
     assignment.fade_in = Math.max(0, parseInt(ev.target.value, 10) || 0);
   });
@@ -1624,7 +1856,8 @@ function getWledBinding(deviceId) {
       ddp: true,
       audio_channel: "stereo",
       effect: {
-        effect: "Solid",
+        engine: "ledfx",  // Default to LEDFx for audio-reactive effects
+        effect: "Energy Flow",
         brightness: 255,
         intensity: 128,
         speed: 128,
@@ -1632,8 +1865,8 @@ function getWledBinding(deviceId) {
         color2: "#ff6600",
         color3: "#0033ff",
         preset: "",
-        audio_link: false,
-        audio_profile: "default",
+        audio_link: true,  // Enable audio reactivity by default
+        audio_profile: "ledfx_energy",
       },
     };
     fx.bindings.push(binding);
@@ -1800,12 +2033,12 @@ function createVirtualSegmentTemplate() {
     members: [],
     effect: {
       engine: "ledfx",
-      effect: "Solid",
+      effect: "Energy Flow",  // Default to audio-reactive effect
       brightness: 255,
       intensity: 128,
       speed: 128,
-      audio_profile: "default",
-      audio_link: false,
+      audio_profile: "ledfx_energy",
+      audio_link: true,  // Enable audio reactivity by default
       audio_mode: "spectrum",
     },
   };
@@ -1818,11 +2051,11 @@ function ensureEffectAssignment(segmentId) {
   if (!assignment) {
     assignment = {
       segment_id: segmentId,
-      engine: led.effects.default_engine || "ledfx",
-      effect: "Solid",
+      engine: led.effects.default_engine || "wled",  // Default to WLED for physical segments (for visual consistency)
+      effect: "Solid",  // Default to simple WLED effect, user can change to audio-reactive
       preset: "",
-      audio_link: false,
-      audio_profile: "default",
+      audio_link: false,  // User can enable audio reactivity if needed
+      audio_profile: "wled_reactive",
       brightness: 255,
       intensity: 128,
       speed: 128,
@@ -1853,6 +2086,8 @@ function ensureEffectAssignment(segmentId) {
       scene_preset: "",
       scene_schedule: "",
       beat_shuffle: false,
+      freq_min: 0,  // 0 = use reactive_mode
+      freq_max: 0,  // 0 = use reactive_mode
     };
     led.effects.assignments.push(assignment);
   }
@@ -1895,6 +2130,8 @@ function ensureEffectAssignment(segmentId) {
   assignment.scene_preset = assignment.scene_preset || "";
   assignment.scene_schedule = assignment.scene_schedule || "";
   assignment.beat_shuffle = Boolean(assignment.beat_shuffle);
+  assignment.freq_min = typeof assignment.freq_min === "number" && Number.isFinite(assignment.freq_min) ? Math.max(0, assignment.freq_min) : 0;
+  assignment.freq_max = typeof assignment.freq_max === "number" && Number.isFinite(assignment.freq_max) ? Math.max(0, assignment.freq_max) : 0;
   return assignment;
 }
 
@@ -2040,7 +2277,7 @@ function renderSegmentTable(led) {
   const body = qs("segmentTableBody");
   if (!body) return;
   if (!led.segments.length) {
-    body.innerHTML = `<tr class="placeholder"><td colspan="9">${t("led_segments_empty")}</td></tr>`;
+    body.innerHTML = `<tr class="placeholder"><td colspan="14">${t("led_segments_empty")}</td></tr>`;
     return;
   }
   const rows = led.segments
@@ -2057,19 +2294,77 @@ function renderSegmentTable(led) {
             ${pinOptions}
           </select>
         </td>
+        <td>
+          <select class="segment-field" data-field="chipset" data-idx="${idx}">
+            <option value="ws2812b" ${seg.chipset === "ws2812b" || !seg.chipset ? "selected" : ""}>WS2812B</option>
+            <option value="ws2812" ${seg.chipset === "ws2812" ? "selected" : ""}>WS2812</option>
+            <option value="ws2813" ${seg.chipset === "ws2813" ? "selected" : ""}>WS2813</option>
+            <option value="ws2815" ${seg.chipset === "ws2815" ? "selected" : ""}>WS2815</option>
+            <option value="sk6812" ${seg.chipset === "sk6812" ? "selected" : ""}>SK6812</option>
+            <option value="sk6812rgbw" ${seg.chipset === "sk6812rgbw" ? "selected" : ""}>SK6812 RGBW</option>
+          </select>
+        </td>
+        <td>
+          <select class="segment-field" data-field="color_order" data-idx="${idx}">
+            <option value="GRB" ${seg.color_order === "GRB" || !seg.color_order ? "selected" : ""}>GRB (WS2812)</option>
+            <option value="RGB" ${seg.color_order === "RGB" ? "selected" : ""}>RGB</option>
+            <option value="BRG" ${seg.color_order === "BRG" ? "selected" : ""}>BRG</option>
+            <option value="RBG" ${seg.color_order === "RBG" ? "selected" : ""}>RBG</option>
+            <option value="GBR" ${seg.color_order === "GBR" ? "selected" : ""}>GBR</option>
+            <option value="BGR" ${seg.color_order === "BGR" ? "selected" : ""}>BGR</option>
+          </select>
+        </td>
         <td><input type="number" min="0" max="7" class="segment-field" data-field="rmt_channel" data-idx="${idx}" value="${seg.rmt_channel ?? 0}"></td>
         <td>
-          <label class="switch compact">
-            <input type="checkbox" class="segment-field" data-field="matrix_enabled" data-idx="${idx}" ${seg.matrix_enabled ? "checked" : ""}>
-            <span></span>
-          </label>
-          <div class="matrix-fields">
-            <input type="number" min="0" class="segment-field" data-field="matrix.width" data-idx="${idx}" value="${matrix.width ?? 0}">
-            <span>&times;</span>
-            <input type="number" min="0" class="segment-field" data-field="matrix.height" data-idx="${idx}" value="${matrix.height ?? 0}">
+          <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+            <label class="switch compact" style="margin-bottom: 0.25rem;">
+              <input type="checkbox" class="segment-field" data-field="matrix_enabled" data-idx="${idx}" ${seg.matrix_enabled ? "checked" : ""}>
+              <span></span>
+            </label>
+            <div class="matrix-fields" style="display: flex; gap: 0.25rem; align-items: center;">
+              <input type="number" min="0" class="segment-field" data-field="matrix.width" data-idx="${idx}" value="${matrix.width ?? 0}" placeholder="W" style="width: 50px;">
+              <span>&times;</span>
+              <input type="number" min="0" class="segment-field" data-field="matrix.height" data-idx="${idx}" value="${matrix.height ?? 0}" placeholder="H" style="width: 50px;">
+            </div>
+            ${seg.matrix_enabled ? `
+            <div style="display: flex; gap: 0.5rem; margin-top: 0.25rem; font-size: 0.75rem;">
+              <label style="display: flex; align-items: center; gap: 0.25rem;">
+                <input type="checkbox" class="segment-field" data-field="matrix.serpentine" data-idx="${idx}" ${matrix.serpentine !== false ? "checked" : ""}>
+                <span>Serpentine</span>
+              </label>
+              <label style="display: flex; align-items: center; gap: 0.25rem;">
+                <input type="checkbox" class="segment-field" data-field="matrix.vertical" data-idx="${idx}" ${matrix.vertical ? "checked" : ""}>
+                <span>Vertical</span>
+              </label>
+            </div>
+            ` : ""}
           </div>
         </td>
-        <td><input type="number" min="0" class="segment-field" data-field="power_limit_ma" data-idx="${idx}" value="${seg.power_limit_ma ?? 0}"></td>
+        <td>
+          <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+            <input type="number" min="0" max="20000" step="100" class="segment-field" data-field="power_limit_ma" data-idx="${idx}" value="${seg.power_limit_ma ?? 0}" placeholder="0=auto" style="width: 100%;">
+            ${(() => {
+              const led = ensureLedEngineConfig();
+              if (!led) return "";
+              const voltage = led.power_supply_voltage || 5;
+              const leds = seg.led_count || 0;
+              // Estimate: WS2812B ~60mA per LED at full white (5V), SK6812 similar
+              // For higher voltage, current is lower for same power: P = V * I, so I = P/V
+              // At 5V: 60mA per LED, at 12V: ~25mA per LED (same power ~300mW)
+              const baseCurrentPerLed = 60; // mA at 5V
+              const estimatedMa = Math.round(leds * baseCurrentPerLed * (5.0 / voltage));
+              const limitMa = seg.power_limit_ma || 0;
+              const globalLimit = led.global_current_limit_ma || 0;
+              if (limitMa > 0) {
+                return `<small class="muted" style="font-size: 0.7rem;">Limit: ${limitMa}mA</small>`;
+              } else if (globalLimit > 0) {
+                return `<small class="muted" style="font-size: 0.7rem;">Global: ${globalLimit}mA</small>`;
+              } else {
+                return `<small class="muted" style="font-size: 0.7rem;">Est: ~${estimatedMa}mA</small>`;
+              }
+            })()}
+          </div>
+        </td>
         <td>
           <select class="segment-field" data-field="effect_source" data-idx="${idx}">
             <option value="local" ${seg.effect_source === "local" ? "selected" : ""}>Local</option>
@@ -2086,7 +2381,13 @@ function renderSegmentTable(led) {
         </td>
         <td>
           <label class="switch compact">
-            <input type="checkbox" class="segment-field" data-field="enabled" data-idx="${idx}" ${seg.enabled ? "checked" : ""}>
+            <input type="checkbox" class="segment-field" data-field="mirror" data-idx="${idx}" ${seg.mirror ? "checked" : ""}>
+            <span></span>
+          </label>
+        </td>
+        <td>
+          <label class="switch compact">
+            <input type="checkbox" class="segment-field" data-field="enabled" data-idx="${idx}" ${seg.enabled !== false ? "checked" : ""}>
             <span></span>
           </label>
         </td>
@@ -2454,6 +2755,8 @@ function handleFxDetailChange(event) {
     fxScenePreset: "scene_preset",
     fxSceneSchedule: "scene_schedule",
     fxBeatShuffle: "beat_shuffle",
+    devFxFreqMin: "freq_min",
+    devFxFreqMax: "freq_max",
   };
   const field = map[event.target.id];
   if (!field) return;
@@ -2469,6 +2772,8 @@ function handleFxDetailChange(event) {
     "band_gain_low",
     "band_gain_mid",
     "band_gain_high",
+    "freq_min",
+    "freq_max",
     "amplitude_scale",
     "brightness_compress",
     "attack_ms",
@@ -2590,21 +2895,46 @@ function handleSegmentInput(event) {
     if (["led_count", "start_index", "power_limit_ma", "render_order"].includes(field)) {
       value = Math.max(0, value);
     }
+    if (field === "power_limit_ma") {
+      value = Math.min(value, 20000); // Max 20A per segment
+    }
   }
   if (field.startsWith("matrix.")) {
     const [, key] = field.split(".");
     seg.matrix = seg.matrix || { width: 0, height: 0, serpentine: true, vertical: false };
-    let numeric = parseInt(value, 10);
-    if (Number.isNaN(numeric)) numeric = 0;
-    seg.matrix[key] = numeric;
+    if (key === "serpentine" || key === "vertical") {
+      // Boolean fields
+      seg.matrix[key] = target.type === "checkbox" ? target.checked : Boolean(value);
+    } else {
+      // Numeric fields
+      let numeric = parseInt(value, 10);
+      if (Number.isNaN(numeric)) numeric = 0;
+      seg.matrix[key] = numeric;
+    }
     if (key === "width" || key === "height") {
       seg.matrix_enabled = seg.matrix_enabled || (seg.matrix.width > 0 && seg.matrix.height > 0);
+      // Re-render to show/hide matrix options
+      renderSegmentTable(led);
     }
+  } else if (field === "chipset" || field === "color_order") {
+    // String fields - chipset and color_order
+    seg[field] = value || (field === "chipset" ? "ws2812b" : "GRB");
   } else {
     seg[field] = value;
   }
   if (field === "name") {
     renderEffectRows(led);
+  }
+  if (field === "matrix_enabled") {
+    // Re-render to show/hide matrix options
+    renderSegmentTable(led);
+  }
+  // Re-render power estimate when LED count or power limit changes
+  if (field === "led_count" || field === "power_limit_ma") {
+    renderSegmentTable(led);
+    if (led.auto_power_limit) {
+      updatePowerSummary();
+    }
   }
 }
 
@@ -2958,6 +3288,44 @@ async function saveMqtt() {
   }
 }
 
+async function syncMqttTopics() {
+  const btn = qs("btnMqttSync");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch("/api/mqtt/sync", { method: "POST" });
+    if (res.ok) {
+      notify(t("toast_mqtt_sync_success") || "Topics synchronized", "ok");
+    } else {
+      const text = await res.text();
+      notify(t("toast_mqtt_sync_failed") || `Sync failed: ${text}`, "error");
+    }
+  } catch (err) {
+    console.error(err);
+    notify(t("toast_mqtt_sync_failed") || "Sync failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function testMqttConnection() {
+  const btn = qs("btnMqttTest");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch("/api/mqtt/test", { method: "POST" });
+    if (res.ok) {
+      notify(t("toast_mqtt_test_success") || "Test message sent", "ok");
+    } else {
+      const text = await res.text();
+      notify(t("toast_mqtt_test_failed") || `Test failed: ${text}`, "error");
+    }
+  } catch (err) {
+    console.error(err);
+    notify(t("toast_mqtt_test_failed") || "Test failed", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function saveSystem() {
   const payload = {
     lang: qs("langMirror").value,
@@ -3059,6 +3427,75 @@ async function triggerOta() {
   }
 }
 
+async function uploadOtaFile() {
+  const fileInput = qs("otaFileInput");
+  if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+    notify("Please select a firmware file", "warn");
+    return;
+  }
+  
+  const file = fileInput.files[0];
+  if (!file.name.toLowerCase().endsWith(".bin")) {
+    notify("Please select a .bin firmware file", "warn");
+    return;
+  }
+  
+  const confirmMsg = `Install firmware from file "${file.name}"? The device will reboot after installation.`;
+  if (!window.confirm(confirmMsg)) return;
+  
+  const formData = new FormData();
+  formData.append("firmware", file);
+  
+  const progressBar = qs("otaUploadProgress");
+  const progressFill = qs("otaProgressFill");
+  const progressText = qs("otaProgressText");
+  const uploadBtn = qs("btnOtaUpload");
+  
+  if (progressBar) progressBar.style.display = "block";
+  if (uploadBtn) uploadBtn.disabled = true;
+  
+  try {
+    setOtaStatus(`Uploading ${file.name}...`);
+    notify("Starting firmware upload...", "ok");
+    
+    const xhr = new XMLHttpRequest();
+    
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        if (progressFill) progressFill.style.width = `${percent}%`;
+        if (progressText) progressText.textContent = `${percent}% (${Math.round(e.loaded / 1024)} KB / ${Math.round(e.total / 1024)} KB)`;
+      }
+    });
+    
+    xhr.addEventListener("load", () => {
+      if (xhr.status === 200) {
+        notify("Firmware upload completed. Device will reboot...", "ok");
+        setOtaStatus("Upload completed, rebooting...");
+        setTimeout(() => {
+          window.location.reload();
+        }, 3000);
+      } else {
+        throw new Error(`HTTP ${xhr.status}: ${xhr.responseText}`);
+      }
+    });
+    
+    xhr.addEventListener("error", () => {
+      throw new Error("Upload failed");
+    });
+    
+    xhr.open("POST", "/api/ota/upload");
+    xhr.send(formData);
+    
+  } catch (err) {
+    console.error(err);
+    notify(`Upload failed: ${err.message}`, "error");
+    setOtaStatus("Upload failed");
+    if (progressBar) progressBar.style.display = "none";
+    if (uploadBtn) uploadBtn.disabled = false;
+  }
+}
+
 function bindLedTabs() {
   const buttons = document.querySelectorAll("#ledSubnav button");
   const panes = document.querySelectorAll(".led-pane");
@@ -3107,10 +3544,14 @@ function initEvents() {
     updateMqttUi();
   });
 
-  qs("btnRefresh").addEventListener("click", () => {
-    refreshInfo(true);
-    loadWledDevices(true);
-  });
+  qs("btnRefresh").addEventListener("click", debounce(() => {
+    if (!state.refreshingInfo) {
+      refreshInfo(true);
+    }
+    if (!state.loadingWled) {
+      loadWledDevices(true);
+    }
+  }, 500));
   qs("btnReboot").addEventListener("click", () => {
     notify(t("toast_rebooting"), "warn");
     fetch("/api/reboot", { method: "POST" });
@@ -3120,8 +3561,8 @@ function initEvents() {
   qs("btnNetworkApply").addEventListener("click", () => saveNetwork(false));
 
   qs("btnSaveMqtt").addEventListener("click", saveMqtt);
-  qs("btnMqttSync").addEventListener("click", () => notify(t("toast_todo"), "warn"));
-  qs("btnMqttTest").addEventListener("click", () => notify(t("toast_todo"), "warn"));
+  qs("btnMqttSync").addEventListener("click", syncMqttTopics);
+  qs("btnMqttTest").addEventListener("click", testMqttConnection);
 
   qs("btnOpenHA").addEventListener("click", () =>
     window.open("http://homeassistant.local:8123", "_blank")
@@ -3143,6 +3584,22 @@ function initEvents() {
   qs("btnFactoryReset").addEventListener("click", factoryReset);
   qs("btnOtaCheck")?.addEventListener("click", checkOta);
   qs("btnOtaApply")?.addEventListener("click", triggerOta);
+  qs("btnOtaSelectFile")?.addEventListener("click", () => {
+    qs("otaFileInput")?.click();
+  });
+  qs("otaFileInput")?.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    const fileName = qs("otaFileName");
+    const uploadBtn = qs("btnOtaUpload");
+    if (file) {
+      if (fileName) fileName.textContent = file.name;
+      if (uploadBtn) uploadBtn.disabled = false;
+    } else {
+      if (fileName) fileName.textContent = "No file selected";
+      if (uploadBtn) uploadBtn.disabled = true;
+    }
+  });
+  qs("btnOtaUpload")?.addEventListener("click", uploadOtaFile);
   const btnRescan = qs("btnWledRescan");
   if (btnRescan) {
     btnRescan.addEventListener("click", rescanWled);
@@ -3150,6 +3607,29 @@ function initEvents() {
   const btnAddWled = qs("btnWledAdd");
   if (btnAddWled) {
     btnAddWled.addEventListener("click", addWledManual);
+  }
+  
+  // Device browser buttons
+  const btnDeviceRescan = qs("btnDeviceRescan");
+  if (btnDeviceRescan) {
+    btnDeviceRescan.addEventListener("click", () => {
+      loadWledDevices(true);
+      refreshInfo(true);
+    });
+  }
+  const btnDeviceAdd = qs("btnDeviceAdd");
+  if (btnDeviceAdd) {
+    btnDeviceAdd.addEventListener("click", () => {
+      // Switch to WLED tab and focus on add form
+      const wledTab = qs("tabConfigWled");
+      if (wledTab) {
+        wledTab.click();
+        setTimeout(() => {
+          const nameInput = qs("wledManualName");
+          if (nameInput) nameInput.focus();
+        }, 100);
+      }
+    });
   }
 
   const segBody = qs("segmentTableBody");
