@@ -6,9 +6,6 @@ on:
       - main
     tags:
       - "v*"
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 jobs:
