@@ -33,8 +33,8 @@ CONFIG_ETH_RMII_CLOCK_OUTPUT=y
 CONFIG_ETH_RMII_CLK_OUTPUT=y
 CONFIG_ETH_ENABLED=y
 
-# WiFi (disabled, but may be required by some components)
-CONFIG_ESP_WIFI_ENABLED=n
+# WiFi (disabled - using Ethernet only)
+# Note: Some components may require WiFi, but we use Ethernet
 
 # MQTT
 CONFIG_MQTT_PROTOCOL_311=y
