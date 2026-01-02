@@ -25,6 +25,12 @@ jobs:
         with:
           version: v5.5.1
 
+      - name: Install ESP-IDF tools
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf_tools.py install
+
       - name: Build firmware and SPIFFS
         shell: bash
         run: |
