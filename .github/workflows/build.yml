@@ -35,8 +35,18 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           idf.py set-target esp32p4
-          idf.py build
+          idf.py build 2>&1 | tee build.log
           idf.py spiffs
+        continue-on-error: false
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build.log
+            build/**/*.log
 
       - name: Collect artifacts
         shell: bash
