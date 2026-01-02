@@ -39,8 +39,9 @@ static void _mdns_browse_send(mdns_browse_t *browse, mdns_if_t interface);
 #if MDNS_ESP_WIFI_ENABLED && (CONFIG_MDNS_PREDEF_NETIF_STA || CONFIG_MDNS_PREDEF_NETIF_AP)
 #include "esp_wifi.h"
 #else
-// Define WIFI_EVENT as string literal when WiFi is disabled to avoid compilation errors
-#define WIFI_EVENT "WIFI_EVENT"
+// Define WIFI_EVENT as const char* when WiFi is disabled to avoid compilation errors
+// WIFI_EVENT from esp_wifi.h is a pointer to a string, not a string literal
+static const char* WIFI_EVENT = "WIFI_EVENT";
 #define WIFI_EVENT_STA_CONNECTED 0
 #define WIFI_EVENT_STA_DISCONNECTED 1
 #define WIFI_EVENT_AP_START 2
