@@ -627,8 +627,7 @@ static esp_err_t api_ota_upload(httpd_req_t* req) {
           if (accumulated_data.length() > 1024) {
             // Too much data without boundary, something's wrong
             ESP_LOGE(TAG, "OTA upload: boundary not found");
-            esp_ota_abort(s_ota_handle);
-            s_ota_handle = 0;
+            ota_abort_upload();
             return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid multipart data");
           }
           break;

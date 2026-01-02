@@ -17,3 +17,4 @@ esp_err_t rmt_driver_deinit_segment(int gpio, uint8_t rmt_channel);
 // Deinitialize all RMT drivers
 void rmt_driver_deinit_all();
 
+

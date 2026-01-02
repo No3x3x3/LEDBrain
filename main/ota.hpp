@@ -12,6 +12,7 @@ esp_err_t ota_trigger_update(const char* url);
 esp_err_t ota_start_upload();
 esp_err_t ota_write_data(const void* data, size_t len);
 esp_err_t ota_finish_upload();
+esp_err_t ota_abort_upload();  // Abort current upload if in progress
 
 // Status helpers for UI/diagnostics.
 const char* ota_state_string();

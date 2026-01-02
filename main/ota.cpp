@@ -196,3 +196,20 @@ esp_err_t ota_finish_upload() {
   
   return ESP_OK;
 }
+
+esp_err_t ota_abort_upload() {
+  if (s_state != OtaState::kInProgress || !s_ota_handle) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  
+  ESP_LOGW(TAG, "Aborting OTA update");
+  esp_ota_abort(s_ota_handle);
+  s_ota_handle = 0;
+  s_update_partition = nullptr;
+  s_state = OtaState::kFailed;
+  s_last_err = ESP_FAIL;
+  s_total_size = 0;
+  s_written_size = 0;
+  
+  return ESP_OK;
+}

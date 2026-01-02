@@ -111,3 +111,4 @@ LEDBrain/
 - Inspired by [WLED](https://github.com/Aircoookie/WLED) and [LEDFx](https://github.com/LedFx/LedFx)
 - Built with ESP-IDF framework
 
+

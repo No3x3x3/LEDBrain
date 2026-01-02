@@ -45,3 +45,4 @@ Rgb sample_gradient(const std::vector<GradientStop>& stops, float t);
 
 }  // namespace ledfx_effects
 
+

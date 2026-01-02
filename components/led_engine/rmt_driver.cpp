@@ -48,7 +48,7 @@ size_t ws2812_encode(rmt_encoder_t* encoder, rmt_channel_handle_t channel, const
                 ws2812->state = 1; // switch to sending reset code
             }
             if (session_state & RMT_ENCODING_MEM_FULL) {
-                state |= RMT_ENCODING_MEM_FULL;
+                state = static_cast<rmt_encode_state_t>(state | RMT_ENCODING_MEM_FULL);
                 goto out;
             }
             // fall-through
@@ -57,10 +57,10 @@ size_t ws2812_encode(rmt_encoder_t* encoder, rmt_channel_handle_t channel, const
                                                     sizeof(ws2812->reset_symbol), &session_state);
             if (session_state & RMT_ENCODING_COMPLETE) {
                 ws2812->state = 0; // back to sending RGB data
-                state |= RMT_ENCODING_COMPLETE;
+                state = static_cast<rmt_encode_state_t>(state | RMT_ENCODING_COMPLETE);
             }
             if (session_state & RMT_ENCODING_MEM_FULL) {
-                state |= RMT_ENCODING_MEM_FULL;
+                state = static_cast<rmt_encode_state_t>(state | RMT_ENCODING_MEM_FULL);
                 goto out;
             }
     }
@@ -120,30 +120,30 @@ static rmt_bytes_encoder_config_t make_bytes_encoder_config(const std::string& c
     // SK6812 timing: T0H=300ns, T0L=900ns, T1H=600ns, T1L=600ns
     if (chipset.find("sk6812") != std::string::npos || chipset.find("SK6812") != std::string::npos) {
         bytes_encoder_config.bit0 = {
-            .level0 = 1,
             .duration0 = 3,  // 300ns @ 10MHz
-            .level1 = 0,
+            .level0 = 1,
             .duration1 = 9,  // 900ns @ 10MHz
+            .level1 = 0,
         };
         bytes_encoder_config.bit1 = {
-            .level0 = 1,
             .duration0 = 6,  // 600ns @ 10MHz
-            .level1 = 0,
+            .level0 = 1,
             .duration1 = 6,  // 600ns @ 10MHz
+            .level1 = 0,
         };
     } else {
         // WS2812 default
         bytes_encoder_config.bit0 = {
-            .level0 = 1,
             .duration0 = 3,  // 300ns @ 10MHz
-            .level1 = 0,
+            .level0 = 1,
             .duration1 = 9,  // 900ns @ 10MHz
+            .level1 = 0,
         };
         bytes_encoder_config.bit1 = {
-            .level0 = 1,
             .duration0 = 9,  // 900ns @ 10MHz
-            .level1 = 0,
+            .level0 = 1,
             .duration1 = 3,  // 300ns @ 10MHz
+            .level1 = 0,
         };
     }
     bytes_encoder_config.flags.msb_first = true;
@@ -175,12 +175,12 @@ static esp_err_t create_ws2812_encoder(rmt_encoder_handle_t* ret_encoder, const 
     }
 
     // Reset code: low for >50us (WS2812) or >80us (SK6812)
-    uint32_t reset_ticks = (chipset.find("sk6812") != std::string::npos || chipset.find("SK6812") != std::string::npos) ? 800 : 500;
+    uint16_t reset_ticks = (chipset.find("sk6812") != std::string::npos || chipset.find("SK6812") != std::string::npos) ? 800 : 500;
     ws2812_encoder->reset_symbol = (rmt_symbol_word_t){
-        .level0 = 0,
         .duration0 = reset_ticks,
-        .level1 = 0,
+        .level0 = 0,
         .duration1 = 0,
+        .level1 = 0,
     };
 
     *ret_encoder = &ws2812_encoder->base;
