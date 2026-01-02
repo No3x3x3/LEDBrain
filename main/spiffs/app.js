@@ -1111,21 +1111,21 @@ function renderEffectDetailForm(target, segment, assignment) {
       </label>
       <label>${t("fxReactiveMode") || "Reactive mode"}
         <select id="devFxReactiveMode" ${assignment.engine === "wled" ? "disabled" : ""}>
-          <option value="full" ${assignment.reactive_mode === "full" ? "selected" : ""}>Full spectrum</option>
-          <option value="kick" ${assignment.reactive_mode === "kick" ? "selected" : ""}>Kick (bass + beat)</option>
-          <option value="bass" ${assignment.reactive_mode === "bass" ? "selected" : ""}>Bass</option>
-          <option value="mids" ${assignment.reactive_mode === "mids" ? "selected" : ""}>Mids</option>
-          <option value="treble" ${assignment.reactive_mode === "treble" ? "selected" : ""}>Treble</option>
+          <option value="full" ${assignment.reactive_mode === "full" ? "selected" : ""}>${t("reactive_mode_full")}</option>
+          <option value="kick" ${assignment.reactive_mode === "kick" ? "selected" : ""}>${t("reactive_mode_kick")}</option>
+          <option value="bass" ${assignment.reactive_mode === "bass" ? "selected" : ""}>${t("reactive_mode_bass")}</option>
+          <option value="mids" ${assignment.reactive_mode === "mids" ? "selected" : ""}>${t("reactive_mode_mids")}</option>
+          <option value="treble" ${assignment.reactive_mode === "treble" ? "selected" : ""}>${t("reactive_mode_treble")}</option>
         </select>
-        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">Or use custom frequency range below</small>`}
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_only_ledfx") || "Only for LEDFx effects"}</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_custom_range") || "Or use custom frequency range below"}</small>`}
       </label>
-      <label>${t("fxFreqMin") || "Frequency min (Hz)"}
+      <label>${t("fx_freq_min")}
         <input type="number" min="0" max="24000" step="10" id="devFxFreqMin" value="${assignment.freq_min || 0}" placeholder="0 = use reactive mode" ${assignment.engine === "wled" ? "disabled" : ""}>
-        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">0 = use reactive mode above</small>`}
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_only_ledfx") || "Only for LEDFx effects"}</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_use_reactive") || "0 = use reactive mode above"}</small>`}
       </label>
-      <label>${t("fxFreqMax") || "Frequency max (Hz)"}
+      <label>${t("fx_freq_max")}
         <input type="number" min="0" max="24000" step="10" id="devFxFreqMax" value="${assignment.freq_max || 0}" placeholder="0 = use reactive mode" ${assignment.engine === "wled" ? "disabled" : ""}>
-        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">0 = use reactive mode above</small>`}
+        ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_only_ledfx") || "Only for LEDFx effects"}</small>` : `<small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_use_reactive") || "0 = use reactive mode above"}</small>`}
       </label>
     </div>
     <h4 style="margin-top: 1.5rem; margin-bottom: 0.75rem;">${t("fx_advanced_title") || "Advanced"}</h4>
