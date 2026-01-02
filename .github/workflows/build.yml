@@ -21,11 +21,9 @@ jobs:
           python-version: "3.11"
 
       - name: Setup ESP-IDF
-        uses: espressif/setup-idf@v1
+        uses: espressif/install-esp-idf-action@v1
         with:
           version: v5.5.1
-          install-esp-idf-tools: true
-          targets: esp32p4
 
       - name: Build firmware and SPIFFS
         shell: bash
