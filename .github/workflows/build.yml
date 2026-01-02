@@ -30,11 +30,17 @@ jobs:
         run: |
           $IDF_PATH/tools/idf_tools.py install
 
-      - name: Build firmware and SPIFFS
+      - name: Configure build
         shell: bash
         run: |
           . $IDF_PATH/export.sh
           idf.py set-target esp32p4
+          idf.py reconfigure
+
+      - name: Build firmware and SPIFFS
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
           idf.py build 2>&1 | tee build.log
           idf.py spiffs
         continue-on-error: false
