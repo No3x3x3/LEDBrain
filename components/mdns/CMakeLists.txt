@@ -20,9 +20,6 @@ if(${target} STREQUAL "linux")
 else()
     set(dependencies lwip console esp_netif)
     set(private_dependencies esp_timer)
-    if(CONFIG_ESP_WIFI_ENABLED)
-        list(APPEND private_dependencies esp_wifi)
-    endif()
     set(srcs "mdns.c" ${MDNS_MEMORY} ${MDNS_NETWORKING} ${MDNS_CONSOLE})
 endif()
 
@@ -39,6 +36,10 @@ endif()
 
 if(CONFIG_ETH_ENABLED)
     idf_component_optional_requires(PRIVATE esp_eth)
+endif()
+
+if(CONFIG_ESP_WIFI_ENABLED)
+    idf_component_optional_requires(PRIVATE esp_wifi)
 endif()
 
 idf_component_get_property(MDNS_VERSION ${COMPONENT_NAME} COMPONENT_VERSION)
