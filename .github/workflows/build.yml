@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           . $IDF_PATH/export.sh
-          idf.py build 2>&1 | tee build.log
+          idf.py build 2>&1 | tee build.log || (cat build.log && exit 1)
           idf.py spiffs
         continue-on-error: false
 
