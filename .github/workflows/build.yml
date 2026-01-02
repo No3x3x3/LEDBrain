@@ -28,7 +28,7 @@ jobs:
       - name: Build firmware and SPIFFS
         shell: bash
         run: |
-          . $HOME/esp/esp-idf/export.sh
+          . $IDF_PATH/export.sh
           idf.py set-target esp32p4
           idf.py build
           idf.py spiffs
