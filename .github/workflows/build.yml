@@ -43,17 +43,20 @@ jobs:
           # Remove sdkconfig to force regeneration from defaults
           rm -f sdkconfig sdkconfig.old
           idf.py set-target esp32p4
-          # Force partition table settings using menuconfig
-          echo "CONFIG_PARTITION_TABLE_SINGLE_APP=n" | idf.py menuconfig --non-interactive || true
-          echo "CONFIG_PARTITION_TABLE_CUSTOM=y" | idf.py menuconfig --non-interactive || true
-          echo "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions.csv\"" | idf.py menuconfig --non-interactive || true
+          idf.py reconfigure
+          # Force partition table settings in generated sdkconfig
+          sed -i 's/^CONFIG_PARTITION_TABLE_SINGLE_APP=.*/CONFIG_PARTITION_TABLE_SINGLE_APP=n/' sdkconfig
+          sed -i 's/^# CONFIG_PARTITION_TABLE_SINGLE_APP is not set/CONFIG_PARTITION_TABLE_SINGLE_APP=n/' sdkconfig
+          sed -i 's/^CONFIG_PARTITION_TABLE_CUSTOM=.*/CONFIG_PARTITION_TABLE_CUSTOM=y/' sdkconfig || echo "CONFIG_PARTITION_TABLE_CUSTOM=y" >> sdkconfig
+          sed -i 's|^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=.*|CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"|' sdkconfig || echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"' >> sdkconfig
+          # Reconfigure again with corrected settings
           idf.py reconfigure
           echo "Configured"
           # Verify partition table configuration
           echo "=== Partition table config in sdkconfig ==="
           grep -E "PARTITION_TABLE|SINGLE_APP" sdkconfig || echo "Warning: Could not find partition config"
           echo "=== Checking for factory partition ==="
-          grep "factory" sdkconfig && echo "ERROR: factory partition still enabled!" || echo "OK: No factory partition"
+          grep "CONFIG_PARTITION_TABLE_SINGLE_APP=y" sdkconfig && echo "ERROR: factory partition still enabled!" || echo "OK: Single app partition disabled"
           echo "=== Partition table file ==="
           cat partitions.csv
 
