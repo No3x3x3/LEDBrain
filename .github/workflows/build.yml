@@ -71,12 +71,15 @@ jobs:
           fi
           echo "=== Partition table file ==="
           cat partitions.csv
+          echo "=== Force partition table generation ==="
+          # Force partition table generation
+          idf.py partition-table || echo "Partition table generation failed"
           echo "=== Checking partition table binary ==="
           if [ -f build/partition_table/partition-table.bin ]; then
             echo "Partition table binary exists, contents:"
             $IDF_PATH/components/partition_table/gen_esp32part.py build/partition_table/partition-table.bin || true
           else
-            echo "ERROR: Partition table binary not found!"
+            echo "WARNING: Partition table binary not found, but continuing..."
           fi
 
       - name: Build firmware
@@ -90,7 +93,7 @@ jobs:
           # Set linker flags to reduce memory usage
           export LDFLAGS="-Wl,--no-keep-memory -Wl,--reduce-memory-overheads"
           # Build with progress monitoring and timeout for each command
-          timeout 5400 idf.py build 2>&1 | tee build.log || (echo "Build failed or timed out at:" && echo "=== Last 200 lines of build.log ===" && tail -200 build.log && echo "=== Stderr log ===" && cat build/log/idf_py_stderr_output_*.log 2>/dev/null | tail -100 || echo "No stderr log found" && echo "=== Stdout log ===" && cat build/log/idf_py_stdout_output_*.log 2>/dev/null | tail -100 || echo "No stdout log found" && exit 1)
+          timeout 5400 idf.py build 2>&1 | tee build.log || (echo "Build failed or timed out at:" && echo "=== Last 300 lines of build.log ===" && tail -300 build.log && echo "=== Searching for error messages ===" && grep -i "error\|failed\|undefined\|undeclared" build.log | tail -50 || echo "No obvious errors found" && echo "=== Ninja build log ===" && find build -name "*.log" -type f -exec echo "=== {} ===" \; -exec tail -30 {} \; 2>/dev/null | head -200 || true && exit 1)
           echo "Build done"
 
       - name: Build SPIFFS
