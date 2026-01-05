@@ -40,11 +40,18 @@ jobs:
           . $IDF_PATH/export.sh
           idf.py set-target esp32p4
           # Remove sdkconfig to force regeneration from defaults
-          rm -f sdkconfig sdkconfig.old
+          rm -f sdkconfig sdkconfig.old build/sdkconfig
+          # Ensure partition table settings are correct
+          echo "CONFIG_PARTITION_TABLE_SINGLE_APP=n" >> sdkconfig.defaults.txt
+          echo "CONFIG_PARTITION_TABLE_CUSTOM=y" >> sdkconfig.defaults.txt
+          echo "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions.csv\"" >> sdkconfig.defaults.txt
           idf.py reconfigure
           echo "Configured"
           # Verify partition table configuration
-          grep -E "PARTITION_TABLE|factory|ota_0" sdkconfig || echo "Warning: Could not verify partition config"
+          echo "=== Partition table config ==="
+          grep -E "PARTITION_TABLE|factory|ota" sdkconfig || echo "Warning: Could not verify partition config"
+          echo "=== Partition table file ==="
+          cat partitions.csv
 
       - name: Build firmware
         shell: bash
