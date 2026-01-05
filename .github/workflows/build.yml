@@ -38,20 +38,20 @@ jobs:
         run: |
           echo "Configuring build..."
           . $IDF_PATH/export.sh
-          idf.py set-target esp32p4
+          # Clean build directory completely
+          rm -rf build
           # Remove sdkconfig to force regeneration from defaults
-          rm -f sdkconfig sdkconfig.old build/sdkconfig
-          # Ensure partition table settings are correct
-          echo "CONFIG_PARTITION_TABLE_SINGLE_APP=n" >> sdkconfig.defaults.txt
-          echo "CONFIG_PARTITION_TABLE_CUSTOM=y" >> sdkconfig.defaults.txt
-          echo "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions.csv\"" >> sdkconfig.defaults.txt
+          rm -f sdkconfig sdkconfig.old
+          idf.py set-target esp32p4
           idf.py reconfigure
           echo "Configured"
           # Verify partition table configuration
-          echo "=== Partition table config ==="
-          grep -E "PARTITION_TABLE|factory|ota" sdkconfig || echo "Warning: Could not verify partition config"
+          echo "=== Partition table config in sdkconfig ==="
+          grep -E "PARTITION_TABLE|SINGLE_APP" sdkconfig || echo "Warning: Could not find partition config"
           echo "=== Partition table file ==="
           cat partitions.csv
+          echo "=== Generated partition table binary ==="
+          ls -lh build/partition_table/partition-table.bin || echo "Partition table binary not found"
 
       - name: Build firmware
         shell: bash
