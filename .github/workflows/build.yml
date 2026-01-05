@@ -56,8 +56,10 @@ jobs:
         run: |
           echo "Building firmware..."
           . $IDF_PATH/export.sh
-          # Limit parallel jobs to avoid memory issues during linking
-          export CMAKE_BUILD_PARALLEL_LEVEL=2
+          # Limit parallel jobs to 1 to avoid memory issues during linking
+          export CMAKE_BUILD_PARALLEL_LEVEL=1
+          # Set linker timeout
+          export LDFLAGS="-Wl,--no-keep-memory"
           # Build with progress monitoring
           idf.py build 2>&1 | tee build.log || (echo "Build failed at:" && tail -200 build.log && exit 1)
           echo "Build done"
