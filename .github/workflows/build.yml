@@ -44,11 +44,12 @@ jobs:
 
       - name: Build firmware
         shell: bash
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: |
           echo "Building firmware..."
           . $IDF_PATH/export.sh
-          idf.py build 2>&1 | tee build.log || (tail -100 build.log && exit 1)
+          # Build with verbose output and progress
+          idf.py build -v 2>&1 | tee build.log || (echo "Build failed at:" && tail -200 build.log && exit 1)
           echo "Build done"
 
       - name: Build SPIFFS
