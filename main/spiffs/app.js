@@ -3209,9 +3209,10 @@ async function loadConfig() {
     updateMqttUi();
 
     ensureLedEngineConfig();
+    // Load language first before rendering UI
+    await loadLang(cfg.lang || "pl");
     renderLightsDashboard();
     renderDeviceExplorer();
-    await loadLang(cfg.lang || "pl");
     await refreshInfo();
     await loadLedState();
     startAutoRefreshLoops();
@@ -3516,12 +3517,26 @@ function bindLedTabs() {
 function bindNavigation() {
   const buttons = document.querySelectorAll(".sidebar nav button");
   const views = document.querySelectorAll(".view");
+  if (!buttons.length || !views.length) {
+    console.warn("Navigation elements not found", { buttons: buttons.length, views: views.length });
+    return;
+  }
   buttons.forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const targetTab = btn.dataset.tab;
+      if (!targetTab) {
+        console.warn("Button missing data-tab attribute", btn);
+        return;
+      }
+      // Update button states
       buttons.forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
+      // Update view visibility
       views.forEach((section) => {
-        section.classList.toggle("active", section.id === btn.dataset.tab);
+        const isActive = section.id === targetTab;
+        section.classList.toggle("active", isActive);
       });
     });
   });
@@ -3529,48 +3544,90 @@ function bindNavigation() {
 }
 
 function initEvents() {
-  qs("langSwitch").addEventListener("change", (e) => {
-    syncLanguageSelects(e.target.value);
-    loadLang(e.target.value);
-  });
-  qs("langMirror").addEventListener("change", (e) => {
-    syncLanguageSelects(e.target.value);
-    loadLang(e.target.value);
-  });
-  qs("dhcp").addEventListener("change", () => {
-    updateDhcpUi();
-  });
-  qs("mqttEnabled").addEventListener("change", () => {
-    updateMqttUi();
-  });
+  const langSwitch = qs("langSwitch");
+  if (langSwitch) {
+    langSwitch.addEventListener("change", (e) => {
+      syncLanguageSelects(e.target.value);
+      loadLang(e.target.value);
+    });
+  }
+  const langMirror = qs("langMirror");
+  if (langMirror) {
+    langMirror.addEventListener("change", (e) => {
+      syncLanguageSelects(e.target.value);
+      loadLang(e.target.value);
+    });
+  }
+  const dhcp = qs("dhcp");
+  if (dhcp) {
+    dhcp.addEventListener("change", () => {
+      updateDhcpUi();
+    });
+  }
+  const mqttEnabled = qs("mqttEnabled");
+  if (mqttEnabled) {
+    mqttEnabled.addEventListener("change", () => {
+      updateMqttUi();
+    });
+  }
 
-  qs("btnRefresh").addEventListener("click", debounce(() => {
-    if (!state.refreshingInfo) {
-      refreshInfo(true);
-    }
-    if (!state.loadingWled) {
-      loadWledDevices(true);
-    }
-  }, 500));
-  qs("btnReboot").addEventListener("click", () => {
-    notify(t("toast_rebooting"), "warn");
-    fetch("/api/reboot", { method: "POST" });
-  });
+  const btnRefresh = qs("btnRefresh");
+  if (btnRefresh) {
+    btnRefresh.addEventListener("click", debounce(() => {
+      if (!state.refreshingInfo) {
+        refreshInfo(true);
+      }
+      if (!state.loadingWled) {
+        loadWledDevices(true);
+      }
+    }, 500));
+  }
+  const btnReboot = qs("btnReboot");
+  if (btnReboot) {
+    btnReboot.addEventListener("click", () => {
+      notify(t("toast_rebooting"), "warn");
+      fetch("/api/reboot", { method: "POST" });
+    });
+  }
 
-  qs("btnSaveNetwork").addEventListener("click", () => saveNetwork(true));
-  qs("btnNetworkApply").addEventListener("click", () => saveNetwork(false));
+  const btnSaveNetwork = qs("btnSaveNetwork");
+  if (btnSaveNetwork) {
+    btnSaveNetwork.addEventListener("click", () => saveNetwork(true));
+  }
+  const btnNetworkApply = qs("btnNetworkApply");
+  if (btnNetworkApply) {
+    btnNetworkApply.addEventListener("click", () => saveNetwork(false));
+  }
 
-  qs("btnSaveMqtt").addEventListener("click", saveMqtt);
-  qs("btnMqttSync").addEventListener("click", syncMqttTopics);
-  qs("btnMqttTest").addEventListener("click", testMqttConnection);
+  const btnSaveMqtt = qs("btnSaveMqtt");
+  if (btnSaveMqtt) {
+    btnSaveMqtt.addEventListener("click", saveMqtt);
+  }
+  const btnMqttSync = qs("btnMqttSync");
+  if (btnMqttSync) {
+    btnMqttSync.addEventListener("click", syncMqttTopics);
+  }
+  const btnMqttTest = qs("btnMqttTest");
+  if (btnMqttTest) {
+    btnMqttTest.addEventListener("click", testMqttConnection);
+  }
 
-  qs("btnOpenHA").addEventListener("click", () =>
-    window.open("http://homeassistant.local:8123", "_blank")
-  );
+  const btnOpenHA = qs("btnOpenHA");
+  if (btnOpenHA) {
+    btnOpenHA.addEventListener("click", () =>
+      window.open("http://homeassistant.local:8123", "_blank")
+    );
+  }
   const brightnessSlider = qs("brightnessGlobal");
+  const brightnessValue = qs("brightnessValue");
   if (brightnessSlider) {
     brightnessSlider.addEventListener("input", (e) => {
       const val = clamp(parseInt(e.target.value, 10) || 0, 1, MAX_BRIGHTNESS);
+      // Update percentage immediately during drag
+      if (brightnessValue) {
+        const pct = Math.round((val / MAX_BRIGHTNESS) * 100);
+        brightnessValue.textContent = `${pct}%`;
+      }
       scheduleBrightnessUpdate(val);
     });
   }
@@ -3580,8 +3637,14 @@ function initEvents() {
     btnPlayback.addEventListener("click", togglePlayback);
   }
 
-  qs("btnSaveSystem").addEventListener("click", saveSystem);
-  qs("btnFactoryReset").addEventListener("click", factoryReset);
+  const btnSaveSystem = qs("btnSaveSystem");
+  if (btnSaveSystem) {
+    btnSaveSystem.addEventListener("click", saveSystem);
+  }
+  const btnFactoryReset = qs("btnFactoryReset");
+  if (btnFactoryReset) {
+    btnFactoryReset.addEventListener("click", factoryReset);
+  }
   qs("btnOtaCheck")?.addEventListener("click", checkOta);
   qs("btnOtaApply")?.addEventListener("click", triggerOta);
   qs("btnOtaSelectFile")?.addEventListener("click", () => {

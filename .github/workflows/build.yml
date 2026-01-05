@@ -23,7 +23,7 @@ jobs:
       - name: Setup ESP-IDF
         uses: espressif/install-esp-idf-action@v1
         with:
-          version: v5.5.1
+          version: v5.5.2
 
       - name: Install ESP-IDF tools
         shell: bash
