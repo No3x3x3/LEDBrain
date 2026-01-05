@@ -21,23 +21,28 @@ jobs:
           python-version: "3.11"
 
       - name: Setup ESP-IDF
-        uses: espressif/github-actions/setup-esp-idf@v1
+        uses: espressif/install-esp-idf-action@v1
         with:
           version: v5.5.1
-          tools-cache: ${{ runner.temp }}/esp-idf-tools
 
       - name: Configure build
+        shell: bash
         run: |
+          . $IDF_PATH/export.sh
           idf.py set-target esp32p4
           idf.py reconfigure
 
       - name: Build firmware
+        shell: bash
         run: |
+          . $IDF_PATH/export.sh
           idf.py build 2>&1 | tee build.log || (cat build.log && exit 1)
         continue-on-error: false
 
       - name: Build SPIFFS
+        shell: bash
         run: |
+          . $IDF_PATH/export.sh
           idf.py spiffs
         continue-on-error: false
 
