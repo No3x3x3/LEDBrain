@@ -28,7 +28,7 @@ jobs:
       - name: Install ESP-IDF tools
         shell: bash
         run: |
-          $IDF_PATH/tools/idf_tools.py install
+          $IDF_PYTHON_ENV_PATH/bin/python $IDF_PATH/tools/idf_tools.py install
 
       - name: Configure build
         shell: bash
