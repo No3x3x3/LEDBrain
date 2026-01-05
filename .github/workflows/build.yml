@@ -22,41 +22,29 @@ jobs:
           python-version: "3.11"
 
       - name: Setup ESP-IDF
-        uses: espressif/install-esp-idf-action@v1
+        uses: espressif/github-actions/setup-esp-idf@v1
         with:
           version: v5.5.1
-
-      - name: Install ESP-IDF tools
-        shell: bash
-        run: |
-          echo "Installing ESP-IDF tools..."
-          $IDF_PYTHON_ENV_PATH/bin/python $IDF_PATH/tools/idf_tools.py install
-          echo "ESP-IDF tools installed successfully"
+          tools-cache: ${{ runner.temp }}/esp-idf-tools
 
       - name: Configure build
-        shell: bash
         run: |
           echo "Configuring build..."
-          . $IDF_PATH/export.sh
           idf.py set-target esp32p4
           idf.py reconfigure
           echo "Build configured successfully"
 
       - name: Build firmware
-        shell: bash
         timeout-minutes: 30
         run: |
           echo "Starting firmware build..."
-          . $IDF_PATH/export.sh
-          idf.py build 2>&1 | tee build.log || (echo "Build failed, showing log:" && cat build.log && exit 1)
+          idf.py build 2>&1 | tee build.log || (echo "Build failed, showing log:" && tail -100 build.log && exit 1)
           echo "Firmware build completed successfully"
 
       - name: Build SPIFFS
-        shell: bash
         timeout-minutes: 10
         run: |
           echo "Building SPIFFS..."
-          . $IDF_PATH/export.sh
           idf.py spiffs
           echo "SPIFFS build completed successfully"
         continue-on-error: false
