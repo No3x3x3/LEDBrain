@@ -54,16 +54,26 @@ jobs:
           # Reconfigure again with corrected settings
           idf.py reconfigure
           echo "Configured"
-          # Verify partition table configuration
+          # Verify partition table configuration BEFORE build
           echo "=== Partition table config in sdkconfig ==="
           grep -E "PARTITION_TABLE|SINGLE_APP" sdkconfig || echo "Warning: Could not find partition config"
           echo "=== Checking for factory partition ==="
-          grep "CONFIG_PARTITION_TABLE_SINGLE_APP=y" sdkconfig && echo "ERROR: factory partition still enabled!" || echo "OK: Single app partition disabled"
+          if grep -q "CONFIG_PARTITION_TABLE_SINGLE_APP=y" sdkconfig; then
+            echo "ERROR: factory partition still enabled! Forcing fix..."
+            sed -i 's/CONFIG_PARTITION_TABLE_SINGLE_APP=y/CONFIG_PARTITION_TABLE_SINGLE_APP=n/' sdkconfig
+            sed -i 's/# CONFIG_PARTITION_TABLE_SINGLE_APP is not set/CONFIG_PARTITION_TABLE_SINGLE_APP=n/' sdkconfig
+            echo "CONFIG_PARTITION_TABLE_CUSTOM=y" >> sdkconfig
+            echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"' >> sdkconfig
+            rm -rf build/partition_table
+            idf.py reconfigure
+          else
+            echo "OK: Single app partition disabled"
+          fi
           echo "=== Partition table file ==="
           cat partitions.csv
           echo "=== Checking partition table binary ==="
           if [ -f build/partition_table/partition-table.bin ]; then
-            echo "Partition table binary exists"
+            echo "Partition table binary exists, contents:"
             $IDF_PATH/components/partition_table/gen_esp32part.py build/partition_table/partition-table.bin || true
           else
             echo "ERROR: Partition table binary not found!"
