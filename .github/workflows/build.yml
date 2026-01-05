@@ -49,6 +49,8 @@ jobs:
           sed -i 's/^# CONFIG_PARTITION_TABLE_SINGLE_APP is not set/CONFIG_PARTITION_TABLE_SINGLE_APP=n/' sdkconfig
           sed -i 's/^CONFIG_PARTITION_TABLE_CUSTOM=.*/CONFIG_PARTITION_TABLE_CUSTOM=y/' sdkconfig || echo "CONFIG_PARTITION_TABLE_CUSTOM=y" >> sdkconfig
           sed -i 's|^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=.*|CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"|' sdkconfig || echo 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"' >> sdkconfig
+          # Remove partition table binary to force regeneration
+          rm -rf build/partition_table
           # Reconfigure again with corrected settings
           idf.py reconfigure
           echo "Configured"
@@ -59,6 +61,13 @@ jobs:
           grep "CONFIG_PARTITION_TABLE_SINGLE_APP=y" sdkconfig && echo "ERROR: factory partition still enabled!" || echo "OK: Single app partition disabled"
           echo "=== Partition table file ==="
           cat partitions.csv
+          echo "=== Checking partition table binary ==="
+          if [ -f build/partition_table/partition-table.bin ]; then
+            echo "Partition table binary exists"
+            $IDF_PATH/components/partition_table/gen_esp32part.py build/partition_table/partition-table.bin || true
+          else
+            echo "ERROR: Partition table binary not found!"
+          fi
 
       - name: Build firmware
         shell: bash
