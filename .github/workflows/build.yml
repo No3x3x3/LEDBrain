@@ -90,7 +90,7 @@ jobs:
           # Set linker flags to reduce memory usage
           export LDFLAGS="-Wl,--no-keep-memory -Wl,--reduce-memory-overheads"
           # Build with progress monitoring and timeout for each command
-          timeout 5400 idf.py build 2>&1 | tee build.log || (echo "Build failed or timed out at:" && tail -200 build.log && exit 1)
+          timeout 5400 idf.py build 2>&1 | tee build.log || (echo "Build failed or timed out at:" && echo "=== Last 100 lines of build.log ===" && tail -100 build.log && echo "=== Error logs ===" && find build/log -name "*.log" -type f -exec echo "=== {} ===" \; -exec tail -50 {} \; 2>/dev/null || true && exit 1)
           echo "Build done"
 
       - name: Build SPIFFS
