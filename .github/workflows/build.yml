@@ -72,14 +72,16 @@ jobs:
           echo "=== Partition table file ==="
           cat partitions.csv
           echo "=== Force partition table generation ==="
-          # Force partition table generation
-          idf.py partition-table || echo "Partition table generation failed"
+          # Force partition table generation and show any errors
+          idf.py partition-table 2>&1 || (echo "Partition table generation failed, showing error:" && idf.py partition-table 2>&1 || true)
           echo "=== Checking partition table binary ==="
           if [ -f build/partition_table/partition-table.bin ]; then
             echo "Partition table binary exists, contents:"
             $IDF_PATH/components/partition_table/gen_esp32part.py build/partition_table/partition-table.bin || true
           else
-            echo "WARNING: Partition table binary not found, but continuing..."
+            echo "WARNING: Partition table binary not found!"
+            echo "Trying to generate manually..."
+            $IDF_PATH/components/partition_table/gen_esp32part.py -q partitions.csv build/partition_table/partition-table.bin 2>&1 || echo "Manual generation also failed"
           fi
 
       - name: Build firmware
