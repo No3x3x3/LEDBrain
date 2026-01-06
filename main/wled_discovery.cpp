@@ -421,6 +421,7 @@ void wled_discovery_start(AppConfig& cfg) {
     xSemaphoreGive(s_lock);
   }
   if (!s_task) {
+    // Core 0: Network/system task (WLED discovery scanning)
     xTaskCreatePinnedToCore(discovery_task, "wled_scan", 4096, nullptr, 4, &s_task, 0);
   }
 }

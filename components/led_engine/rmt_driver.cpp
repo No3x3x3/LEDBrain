@@ -1,4 +1,6 @@
 #include "led_engine/rmt_driver.hpp"
+#include "led_engine/chipset_info.hpp"
+#include "led_engine/color_processing.hpp"
 #include "esp_log.h"
 #include "driver/rmt_tx.h"
 #include "driver/rmt_encoder.h"
@@ -6,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <stddef.h>
+#include <cmath>
 
 #ifndef __containerof
 #define __containerof(ptr, type, member) \
@@ -94,6 +97,8 @@ struct RmtDriverSegment {
     uint8_t rmt_channel;
     std::string chipset;
     std::string color_order;
+    bool supports_rgbw;
+    uint8_t bytes_per_pixel;
     bool initialized;
     std::vector<uint8_t> buffer;
 };
@@ -101,48 +106,48 @@ struct RmtDriverSegment {
 static std::vector<RmtDriverSegment> s_segments;
 static std::mutex s_mutex;
 
-static rmt_tx_channel_config_t make_channel_config(int gpio) {
+static rmt_tx_channel_config_t make_channel_config(int gpio, bool enable_dma) {
     rmt_tx_channel_config_t tx_chan_config = {};
     tx_chan_config.gpio_num = static_cast<gpio_num_t>(gpio);
     tx_chan_config.clk_src = RMT_CLK_SRC_DEFAULT;
     tx_chan_config.resolution_hz = 10'000'000;  // 10MHz = 100ns per tick
     tx_chan_config.mem_block_symbols = 64;
     tx_chan_config.trans_queue_depth = 4;
-    tx_chan_config.flags.with_dma = false;  // Can enable if needed
+    tx_chan_config.flags.with_dma = enable_dma;  // Use DMA if enabled in config
     tx_chan_config.flags.invert_out = false;
     return tx_chan_config;
 }
 
-static rmt_bytes_encoder_config_t make_bytes_encoder_config(const std::string& chipset) {
+static rmt_bytes_encoder_config_t make_bytes_encoder_config(const ChipsetInfo* info) {
     rmt_bytes_encoder_config_t bytes_encoder_config = {};
     
-    // WS2812 timing: T0H=300ns, T0L=900ns, T1H=900ns, T1L=300ns
-    // SK6812 timing: T0H=300ns, T0L=900ns, T1H=600ns, T1L=600ns
-    if (chipset.find("sk6812") != std::string::npos || chipset.find("SK6812") != std::string::npos) {
+    if (info->uses_spi) {
+        // SPI-based chipsets (APA102, SK9822) use different protocol
+        // For now, return default - SPI support will be added separately
         bytes_encoder_config.bit0 = {
-            .duration0 = 3,  // 300ns @ 10MHz
+            .duration0 = 3,
             .level0 = 1,
-            .duration1 = 9,  // 900ns @ 10MHz
+            .duration1 = 9,
             .level1 = 0,
         };
         bytes_encoder_config.bit1 = {
-            .duration0 = 6,  // 600ns @ 10MHz
+            .duration0 = 9,
             .level0 = 1,
-            .duration1 = 6,  // 600ns @ 10MHz
+            .duration1 = 3,
             .level1 = 0,
         };
     } else {
-        // WS2812 default
+        // RMT-based chipsets use timing from chipset info
         bytes_encoder_config.bit0 = {
-            .duration0 = 3,  // 300ns @ 10MHz
+            .duration0 = info->timing.t0h_ticks,
             .level0 = 1,
-            .duration1 = 9,  // 900ns @ 10MHz
+            .duration1 = info->timing.t0l_ticks,
             .level1 = 0,
         };
         bytes_encoder_config.bit1 = {
-            .duration0 = 9,  // 900ns @ 10MHz
+            .duration0 = info->timing.t1h_ticks,
             .level0 = 1,
-            .duration1 = 3,  // 300ns @ 10MHz
+            .duration1 = info->timing.t1l_ticks,
             .level1 = 0,
         };
     }
@@ -150,44 +155,43 @@ static rmt_bytes_encoder_config_t make_bytes_encoder_config(const std::string& c
     return bytes_encoder_config;
 }
 
-static esp_err_t create_ws2812_encoder(rmt_encoder_handle_t* ret_encoder, const std::string& chipset) {
-    ws2812_encoder_t* ws2812_encoder = (ws2812_encoder_t*)calloc(1, sizeof(ws2812_encoder_t));
-    if (ws2812_encoder == nullptr) {
+static esp_err_t create_led_encoder(rmt_encoder_handle_t* ret_encoder, const ChipsetInfo* chipset_info) {
+    ws2812_encoder_t* encoder = (ws2812_encoder_t*)calloc(1, sizeof(ws2812_encoder_t));
+    if (encoder == nullptr) {
         return ESP_ERR_NO_MEM;
     }
-    ws2812_encoder->base.encode = ws2812_encode;
-    ws2812_encoder->base.del = ws2812_del;
-    ws2812_encoder->base.reset = ws2812_reset;
+    encoder->base.encode = ws2812_encode;
+    encoder->base.del = ws2812_del;
+    encoder->base.reset = ws2812_reset;
 
-    rmt_bytes_encoder_config_t bytes_encoder_config = make_bytes_encoder_config(chipset);
-    esp_err_t err = rmt_new_bytes_encoder(&bytes_encoder_config, &ws2812_encoder->bytes_encoder);
+    rmt_bytes_encoder_config_t bytes_encoder_config = make_bytes_encoder_config(chipset_info);
+    esp_err_t err = rmt_new_bytes_encoder(&bytes_encoder_config, &encoder->bytes_encoder);
     if (err != ESP_OK) {
-        free(ws2812_encoder);
+        free(encoder);
         return err;
     }
 
     rmt_copy_encoder_config_t copy_encoder_config = {};
-    err = rmt_new_copy_encoder(&copy_encoder_config, &ws2812_encoder->copy_encoder);
+    err = rmt_new_copy_encoder(&copy_encoder_config, &encoder->copy_encoder);
     if (err != ESP_OK) {
-        rmt_del_encoder(ws2812_encoder->bytes_encoder);
-        free(ws2812_encoder);
+        rmt_del_encoder(encoder->bytes_encoder);
+        free(encoder);
         return err;
     }
 
-    // Reset code: low for >50us (WS2812) or >80us (SK6812)
-    uint16_t reset_ticks = (chipset.find("sk6812") != std::string::npos || chipset.find("SK6812") != std::string::npos) ? 800 : 500;
-    ws2812_encoder->reset_symbol = (rmt_symbol_word_t){
-        .duration0 = reset_ticks,
+    // Reset code from chipset timing
+    encoder->reset_symbol = (rmt_symbol_word_t){
+        .duration0 = chipset_info->timing.reset_ticks,
         .level0 = 0,
         .duration1 = 0,
         .level1 = 0,
     };
 
-    *ret_encoder = &ws2812_encoder->base;
+    *ret_encoder = &encoder->base;
     return ESP_OK;
 }
 
-esp_err_t rmt_driver_init_segment(const LedSegmentConfig& seg) {
+esp_err_t rmt_driver_init_segment(const LedSegmentConfig& seg, bool enable_dma) {
     std::lock_guard<std::mutex> lock(s_mutex);
     
     // Check if already initialized
@@ -202,19 +206,26 @@ esp_err_t rmt_driver_init_segment(const LedSegmentConfig& seg) {
     driver_seg.gpio = seg.gpio;
     driver_seg.rmt_channel = seg.rmt_channel;
     driver_seg.chipset = seg.chipset.empty() ? "ws2812b" : seg.chipset;
-    driver_seg.color_order = seg.color_order.empty() ? "GRB" : seg.color_order;
+    
+    // Get chipset info
+    const ChipsetInfo* chipset_info = get_chipset_info(driver_seg.chipset);
+    driver_seg.supports_rgbw = chipset_info->supports_rgbw;
+    driver_seg.bytes_per_pixel = chipset_info->supports_rgbw ? 4 : 3;
+    
+    // Use chipset default color order if not specified
+    driver_seg.color_order = seg.color_order.empty() ? chipset_info->default_color_order : seg.color_order;
     driver_seg.initialized = false;
 
     // Create RMT channel (ESP-IDF 5.x doesn't use channel numbers, each channel is independent)
-    rmt_tx_channel_config_t tx_chan_config = make_channel_config(seg.gpio);
+    rmt_tx_channel_config_t tx_chan_config = make_channel_config(seg.gpio, enable_dma);
     esp_err_t err = rmt_new_tx_channel(&tx_chan_config, &driver_seg.channel);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create RMT channel for GPIO %d: %s", seg.gpio, esp_err_to_name(err));
         return err;
     }
 
-    // Create encoder
-    err = create_ws2812_encoder(&driver_seg.encoder, driver_seg.chipset);
+    // Create encoder with chipset-specific timing
+    err = create_led_encoder(&driver_seg.encoder, chipset_info);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create encoder for GPIO %d: %s", seg.gpio, esp_err_to_name(err));
         rmt_del_channel(driver_seg.channel);
@@ -230,7 +241,8 @@ esp_err_t rmt_driver_init_segment(const LedSegmentConfig& seg) {
         return err;
     }
 
-    driver_seg.buffer.resize(seg.led_count * 3);
+    // Allocate buffer for full segment (RGB or RGBW)
+    driver_seg.buffer.resize(seg.led_count * driver_seg.bytes_per_pixel);
     driver_seg.initialized = true;
 
     if (it != s_segments.end()) {
@@ -245,73 +257,92 @@ esp_err_t rmt_driver_init_segment(const LedSegmentConfig& seg) {
 }
 
 esp_err_t rmt_driver_render(const LedSegmentConfig& seg, const std::vector<uint8_t>& rgb, size_t start, size_t length) {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    
-    auto it = std::find_if(s_segments.begin(), s_segments.end(),
-                          [&](const RmtDriverSegment& s) { return s.gpio == seg.gpio && s.rmt_channel == seg.rmt_channel; });
-    if (it == s_segments.end() || !it->initialized) {
-        return ESP_ERR_INVALID_STATE;
+    // Minimize mutex lock time - only for lookup
+    RmtDriverSegment* driver_seg = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        auto it = std::find_if(s_segments.begin(), s_segments.end(),
+                              [&](const RmtDriverSegment& s) { return s.gpio == seg.gpio && s.rmt_channel == seg.rmt_channel; });
+        if (it == s_segments.end() || !it->initialized) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        driver_seg = &(*it);  // Store pointer, mutex released after this block
     }
-
-    if (rgb.size() < (start + length) * 3) {
+    
+    // Input is always RGB (3 bytes per pixel)
+    const uint8_t input_bytes_per_pixel = 3;
+    if (rgb.size() < (start + length) * input_bytes_per_pixel) {
         return ESP_ERR_INVALID_SIZE;
     }
 
-    // Ensure buffer is large enough for full segment
-    if (it->buffer.size() < seg.led_count * 3) {
-        it->buffer.resize(seg.led_count * 3, 0);
-    }
-
-    // Apply color order conversion and copy to buffer
-    const size_t pixel_count = std::min(length, seg.led_count - start);
-    const uint8_t* src = rgb.data() + start * 3;
-    uint8_t* dst = it->buffer.data() + start * 3;
-
-    // Convert color order if needed
-    const std::string& order = it->color_order;
-    for (size_t i = 0; i < pixel_count; ++i) {
-        const uint8_t r = src[i * 3 + 0];
-        const uint8_t g = src[i * 3 + 1];
-        const uint8_t b = src[i * 3 + 2];
-        
-        if (order == "GRB" || order == "grb") {
-            dst[i * 3 + 0] = g;
-            dst[i * 3 + 1] = r;
-            dst[i * 3 + 2] = b;
-        } else if (order == "RGB" || order == "rgb") {
-            dst[i * 3 + 0] = r;
-            dst[i * 3 + 1] = g;
-            dst[i * 3 + 2] = b;
-        } else if (order == "BRG" || order == "brg") {
-            dst[i * 3 + 0] = b;
-            dst[i * 3 + 1] = r;
-            dst[i * 3 + 2] = g;
-        } else if (order == "RBG" || order == "rbg") {
-            dst[i * 3 + 0] = r;
-            dst[i * 3 + 1] = b;
-            dst[i * 3 + 2] = g;
-        } else if (order == "GBR" || order == "gbr") {
-            dst[i * 3 + 0] = g;
-            dst[i * 3 + 1] = b;
-            dst[i * 3 + 2] = r;
-        } else if (order == "BGR" || order == "bgr") {
-            dst[i * 3 + 0] = b;
-            dst[i * 3 + 1] = g;
-            dst[i * 3 + 2] = r;
-        } else {
-            // Default to GRB (WS2812)
-            dst[i * 3 + 0] = g;
-            dst[i * 3 + 1] = r;
-            dst[i * 3 + 2] = b;
+    // Ensure buffer is large enough for full segment (RGB or RGBW)
+    const size_t buffer_size = seg.led_count * driver_seg->bytes_per_pixel;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (driver_seg->buffer.size() < buffer_size) {
+            driver_seg->buffer.resize(buffer_size, 0);
         }
     }
 
-    // Send via RMT - send full segment buffer for proper reset timing
+    // Process pixels with color processing pipeline (outside mutex for performance)
+    const size_t pixel_count = std::min(length, seg.led_count - start);
+    const uint8_t* src = rgb.data() + start * input_bytes_per_pixel;
+    
+    // Get gamma values from segment config (default to 2.2 if not set)
+    float gamma_color = seg.gamma_color > 0.0f ? seg.gamma_color : 2.2f;
+    float gamma_brightness = seg.gamma_brightness > 0.0f ? seg.gamma_brightness : 2.2f;
+    bool apply_gamma_flag = seg.apply_gamma;
+    
+    // Process pixels to temporary buffer (no mutex needed)
+    std::vector<uint8_t> temp_buffer(pixel_count * driver_seg->bytes_per_pixel);
+    for (size_t i = 0; i < pixel_count; ++i) {
+        process_pixel(src + i * input_bytes_per_pixel, 
+                     temp_buffer.data() + i * driver_seg->bytes_per_pixel,
+                     driver_seg->color_order,
+                     driver_seg->bytes_per_pixel,
+                     gamma_color,
+                     gamma_brightness,
+                     apply_gamma_flag);
+    }
+    
+    // Copy to segment buffer and send (minimal mutex time)
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        // Verify segment still exists and is initialized
+        auto it = std::find_if(s_segments.begin(), s_segments.end(),
+                              [&](const RmtDriverSegment& s) { return s.gpio == seg.gpio && s.rmt_channel == seg.rmt_channel; });
+        if (it == s_segments.end() || !it->initialized) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        
+        // Copy processed pixels to segment buffer
+        std::memcpy(it->buffer.data() + start * it->bytes_per_pixel, 
+                   temp_buffer.data(), 
+                   temp_buffer.size());
+    }
+    
+    // Send via RMT (non-blocking, doesn't need mutex)
     rmt_transmit_config_t tx_config = {};
     tx_config.loop_count = 0;
     tx_config.flags.eot_level = 0;
+    
+    // Need to get channel/encoder pointer (minimal lock)
+    rmt_channel_handle_t channel;
+    rmt_encoder_handle_t encoder;
+    uint8_t* buffer_ptr;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        auto it = std::find_if(s_segments.begin(), s_segments.end(),
+                              [&](const RmtDriverSegment& s) { return s.gpio == seg.gpio && s.rmt_channel == seg.rmt_channel; });
+        if (it == s_segments.end() || !it->initialized) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        channel = it->channel;
+        encoder = it->encoder;
+        buffer_ptr = it->buffer.data();
+    }
 
-    esp_err_t err = rmt_transmit(it->channel, it->encoder, it->buffer.data(), seg.led_count * 3, &tx_config);
+    esp_err_t err = rmt_transmit(channel, encoder, buffer_ptr, buffer_size, &tx_config);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "RMT transmit failed for GPIO %d: %s", seg.gpio, esp_err_to_name(err));
         return err;

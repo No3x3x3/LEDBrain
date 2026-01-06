@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 static const char* TAG = "ddp";
 
@@ -24,32 +25,17 @@ struct DDPHeader {
 
 namespace {
 
-bool ddp_send_frame_internal(const std::string& host,
-                             uint16_t port,
-                             const uint8_t* payload,
-                             size_t bytes,
-                             uint32_t channel,
-                             uint32_t data_offset,
-                             uint8_t seq) {
-    // --- resolve hostname ---
-    struct addrinfo hints = {};
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-
-    struct addrinfo* res = nullptr;
-    char port_str[8];
-    snprintf(port_str, sizeof(port_str), "%d", port);
-
-    int err = getaddrinfo(host.c_str(), port_str, &hints, &res);
-    if (err != 0 || !res) {
-        ESP_LOGE(TAG, "Failed to resolve %s (err=%d)", host.c_str(), err);
-        return false;
-    }
-
-    int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+bool ddp_send_frame_internal(const struct sockaddr* addr,
+                              socklen_t addr_len,
+                              uint16_t port,
+                              const uint8_t* payload,
+                              size_t bytes,
+                              uint32_t channel,
+                              uint32_t data_offset,
+                              uint8_t seq) {
+    int sock = socket(addr->sa_family, SOCK_DGRAM, 0);
     if (sock < 0) {
         ESP_LOGE(TAG, "Unable to create UDP socket");
-        freeaddrinfo(res);
         return false;
     }
 
@@ -67,16 +53,14 @@ bool ddp_send_frame_internal(const std::string& host,
         memcpy(buf.data() + sizeof(DDPHeader), payload, bytes);
     }
 
-    int sent = sendto(sock, buf.data(), buf.size(), 0, res->ai_addr, res->ai_addrlen);
+    int sent = sendto(sock, buf.data(), buf.size(), 0, addr, addr_len);
     if (sent < 0) {
-        ESP_LOGE(TAG, "DDP send error -> %s:%u", host.c_str(), port);
+        ESP_LOGE(TAG, "DDP send error");
         close(sock);
-        freeaddrinfo(res);
         return false;
     }
 
     close(sock);
-    freeaddrinfo(res);
     return sent == static_cast<int>(buf.size());
 }
 
@@ -88,7 +72,60 @@ bool ddp_send_frame(const std::string& host,
                     uint32_t channel,
                     uint32_t data_offset,
                     uint8_t seq) {
-    return ddp_send_frame_internal(host, port, payload.data(), payload.size(), channel, data_offset, seq);
+    // Resolve hostname
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    struct addrinfo* res = nullptr;
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    int err = getaddrinfo(host.c_str(), port_str, &hints, &res);
+    if (err != 0 || !res) {
+        ESP_LOGE(TAG, "Failed to resolve %s (err=%d)", host.c_str(), err);
+        return false;
+    }
+
+    bool ok = ddp_send_frame_internal(res->ai_addr, res->ai_addrlen, port, payload.data(), payload.size(), channel, data_offset, seq);
+    freeaddrinfo(res);
+    return ok;
+}
+
+bool ddp_send_frame_cached(const struct sockaddr_storage* addr,
+                           socklen_t addr_len,
+                           uint16_t port,
+                           const std::vector<uint8_t>& payload,
+                           uint32_t channel,
+                           uint32_t data_offset,
+                           uint8_t seq) {
+    return ddp_send_frame_internal(reinterpret_cast<const struct sockaddr*>(addr), addr_len, port, 
+                                   payload.data(), payload.size(), channel, data_offset, seq);
+}
+
+bool ddp_cache_resolve(const std::string& host, uint16_t port, struct sockaddr_storage* out_addr, socklen_t* out_addr_len) {
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    struct addrinfo* res = nullptr;
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    int err = getaddrinfo(host.c_str(), port_str, &hints, &res);
+    if (err != 0 || !res) {
+        return false;
+    }
+
+    if (res->ai_addrlen <= sizeof(*out_addr)) {
+        std::memcpy(out_addr, res->ai_addr, res->ai_addrlen);
+        *out_addr_len = res->ai_addrlen;
+        freeaddrinfo(res);
+        return true;
+    }
+    
+    freeaddrinfo(res);
+    return false;
 }
 
 // ------------------------------------------------------------
@@ -116,7 +153,7 @@ bool ddp_send_test(const std::string& host, uint16_t port, uint16_t pixels)
     }
 
     static uint8_t seq = 0;
-    bool ok = ddp_send_frame_internal(host, port, buf.data(), buf.size(), 1, 0, seq++);
+    bool ok = ddp_send_frame(host, port, buf, 1, 0, seq++);
     if (ok) {
       ESP_LOGI(TAG, "DDP frame sent (%u bytes) -> %s:%u", static_cast<unsigned>(buf.size()), host.c_str(), port);
     }

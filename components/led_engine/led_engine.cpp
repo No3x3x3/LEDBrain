@@ -79,7 +79,7 @@ esp_err_t LedEngineRuntime::configure_driver(const LedHardwareConfig& cfg) {
     }
     
     if (cfg.driver == LedDriverType::EspRmt) {
-      const esp_err_t rmt_err = rmt_driver_init_segment(seg);
+      const esp_err_t rmt_err = rmt_driver_init_segment(seg, cfg.enable_dma);
       if (rmt_err != ESP_OK) {
         ESP_LOGW(TAG, "RMT init failed for segment %s: %s", seg.name.c_str(), esp_err_to_name(rmt_err));
         status = rmt_err;

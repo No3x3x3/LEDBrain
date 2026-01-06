@@ -63,17 +63,29 @@ void fft(std::vector<FftBin>& data) {
   }
 }
 
-void compute_metrics(const int16_t* pcm, size_t samples, uint32_t sample_rate, bool stereo) {
+void compute_metrics(const int16_t* pcm, size_t samples, uint32_t sample_rate, bool stereo, uint16_t fft_size,
+                     float buffered_ms, uint64_t frame_timestamp_us) {
   if (!pcm || samples == 0) {
     return;
   }
-  const size_t fft_size = 1024;
+  // Ensure fft_size is power of 2 and at least 64
+  size_t actual_fft_size = fft_size;
+  if (actual_fft_size < 64) actual_fft_size = 64;
+  // Round down to nearest power of 2
+  size_t power_of_2 = 64;
+  while (power_of_2 < actual_fft_size && power_of_2 < 4096) {
+    power_of_2 <<= 1;
+  }
+  if (power_of_2 > actual_fft_size) {
+    power_of_2 >>= 1;
+  }
+  actual_fft_size = power_of_2;
   std::vector<float> mono;
-  mono.reserve(fft_size);
+  mono.reserve(actual_fft_size);
 
   float energy_l = 0.0f, energy_r = 0.0f;
   size_t count = 0;
-  for (size_t i = 0; i + (stereo ? 1 : 0) < samples && count < fft_size; i += (stereo ? 2 : 1)) {
+  for (size_t i = 0; i + (stereo ? 1 : 0) < samples && count < actual_fft_size; i += (stereo ? 2 : 1)) {
     const float l = static_cast<float>(pcm[i]) / 32768.0f;
     const float r = stereo ? static_cast<float>(pcm[i + 1]) / 32768.0f : l;
     mono.push_back((l + r) * 0.5f);
@@ -81,24 +93,24 @@ void compute_metrics(const int16_t* pcm, size_t samples, uint32_t sample_rate, b
     energy_r += r * r;
     ++count;
   }
-  if (mono.size() < fft_size) {
-    mono.resize(fft_size, 0.0f);
+  if (mono.size() < actual_fft_size) {
+    mono.resize(actual_fft_size, 0.0f);
   }
   apply_hann(mono);
-  std::vector<FftBin> bins(fft_size);
-  for (size_t i = 0; i < fft_size; ++i) {
+  std::vector<FftBin> bins(actual_fft_size);
+  for (size_t i = 0; i < actual_fft_size; ++i) {
     bins[i].re = mono[i];
   }
   fft(bins);
 
-  const float norm = 1.0f / static_cast<float>(fft_size);
-  std::vector<float> magn(fft_size / 2);
+  const float norm = 1.0f / static_cast<float>(actual_fft_size);
+  std::vector<float> magn(actual_fft_size / 2);
   for (size_t i = 0; i < magn.size(); ++i) {
     magn[i] = sqrtf(bins[i].re * bins[i].re + bins[i].im * bins[i].im) * norm;
   }
 
   auto band_energy = [&](float f_low, float f_high) {
-    const float bin_hz = static_cast<float>(sample_rate) / fft_size;
+    const float bin_hz = static_cast<float>(sample_rate) / static_cast<float>(actual_fft_size);
     size_t i_low = static_cast<size_t>(f_low / bin_hz);
     size_t i_high = static_cast<size_t>(f_high / bin_hz);
     i_low = std::min(i_low, magn.size() - 1);
@@ -110,7 +122,7 @@ void compute_metrics(const int16_t* pcm, size_t samples, uint32_t sample_rate, b
       ++n;
     }
     return n > 0 ? acc / n : 0.0f;
-  };
+  };;
 
   AudioMetrics metrics{};
   metrics.energy = std::min(1.0f, sqrtf((energy_l + energy_r) / std::max<size_t>(1, count)));  // RMS instead of raw
@@ -206,6 +218,15 @@ void compute_metrics(const int16_t* pcm, size_t samples, uint32_t sample_rate, b
   // Store magnitude spectrum for custom frequency range calculations
   metrics.magnitude_spectrum = magn;
   metrics.sample_rate = sample_rate;
+  
+  // Calculate timestamp for synchronization with audio playback
+  // For Snapcast: timestamp should be when this audio chunk will be played
+  // We use the buffer delay + frame timestamp to estimate playback time
+  // This ensures LED effects are synchronized with audio on other Snapcast clients
+  // Estimate when this frame will be played: frame timestamp + remaining buffer delay
+  // This accounts for the latency configured in Snapcast
+  metrics.timestamp_us = frame_timestamp_us + static_cast<uint64_t>(buffered_ms * 1000.0f);
+  metrics.processed_us = now_us;
 
   led_audio_set_metrics(metrics);
 }
@@ -318,12 +339,20 @@ void snap_task(void*) {
 
       const size_t chunk = std::min(pcm_buffer.size(), frame_samples);
       if (chunk >= frame_samples) {
+        // Calculate timestamp BEFORE processing (for accurate sync)
+        const uint64_t frame_timestamp_us = esp_timer_get_time();
+        const float buffered_ms = (pcm_buffer.size() / static_cast<float>(stereo ? 2 : 1)) * 1000.0f / sample_rate;
+        
         std::vector<int16_t> chunk_buf(frame_samples);
         for (size_t i = 0; i < frame_samples; ++i) {
           chunk_buf[i] = pcm_buffer.front();
           pcm_buffer.pop_front();
         }
-        compute_metrics(chunk_buf.data(), frame_samples, sample_rate, stereo);
+        // Get FFT size from audio config - use default 1024 for now
+        // TODO: Pass fft_size from AudioConfig when available
+        uint16_t fft_size = 1024;
+        compute_metrics(chunk_buf.data(), frame_samples, sample_rate, stereo, fft_size, 
+                       buffered_ms, frame_timestamp_us);
       }
     }
     close(sock);
@@ -345,7 +374,9 @@ esp_err_t snapclient_light_start(const SnapcastConfig& cfg) {
     return ESP_OK;
   }
   s_running = true;
-  const BaseType_t res = xTaskCreatePinnedToCore(snap_task, "snapclient", 4096, nullptr, 4, &s_task, tskNO_AFFINITY);
+  // Pin to Core 1 for real-time audio processing (isolated from network/system tasks)
+  // Higher priority (6) than LED effects (5) to ensure audio processing doesn't lag
+  const BaseType_t res = xTaskCreatePinnedToCore(snap_task, "snapclient", 4096, nullptr, 6, &s_task, 1);
   if (res != pdPASS) {
     s_running = false;
     s_task = nullptr;

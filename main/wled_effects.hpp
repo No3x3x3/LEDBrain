@@ -9,6 +9,8 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 class WledEffectsRuntime {
  public:
@@ -48,4 +50,30 @@ class WledEffectsRuntime {
   bool running_{false};
   uint8_t seq_{0};
   std::unordered_map<std::string, float> envelope_state_;
+  
+  // Performance optimizations for multiple devices/segments
+  struct CachedAddrInfo {
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+    uint64_t cached_at_us;
+    bool valid;
+  };
+  std::unordered_map<std::string, CachedAddrInfo> ddp_addr_cache_;  // IP -> cached addrinfo
+  static constexpr uint64_t DNS_CACHE_TTL_US = 30'000'000ULL;  // 30 seconds
+  
+  // Frame cache for same effect (same effect + same LED count = reuse frame)
+  struct FrameCacheKey {
+    std::string effect_name;
+    uint16_t led_count;
+    uint32_t frame_idx;
+    bool operator==(const FrameCacheKey& other) const {
+      return effect_name == other.effect_name && led_count == other.led_count && frame_idx == other.frame_idx;
+    }
+  };
+  struct FrameCacheKeyHash {
+    size_t operator()(const FrameCacheKey& k) const {
+      return std::hash<std::string>{}(k.effect_name) ^ (std::hash<uint16_t>{}(k.led_count) << 1) ^ (std::hash<uint32_t>{}(k.frame_idx) << 2);
+    }
+  };
+  std::unordered_map<FrameCacheKey, std::vector<uint8_t>, FrameCacheKeyHash> frame_cache_;
 };

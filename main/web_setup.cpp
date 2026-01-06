@@ -35,6 +35,10 @@ static const char* TAG="web";
 
 static esp_err_t send_mem(httpd_req_t* req, const unsigned char* begin, const unsigned char* end, const char* type){
   httpd_resp_set_type(req, type);
+  // Disable caching for static files to ensure updates are visible
+  httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+  httpd_resp_set_hdr(req, "Pragma", "no-cache");
+  httpd_resp_set_hdr(req, "Expires", "0");
   return httpd_resp_send(req, (const char*)begin, end-begin);
 }
 

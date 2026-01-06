@@ -182,7 +182,6 @@
   "led_max_fps": "Docelowe FPS",
   "led_current_limit": "Limit prądu (mA)",
   "led_parallel_outputs": "Wyjścia równoległe",
-  "led_dedicated_core": "Dedykowany rdzeń",
   "led_enable_dma": "Przyspieszenie DMA",
   "led_psu_hint": "Zasil taśmy bezpośrednio z PSU i połącz masę z kontrolerem.",
   "col_fx_brightness": "Jasność",

@@ -7,9 +7,14 @@
 #include "led_engine/audio_pipeline.hpp"
 #include "wled_discovery.hpp"
 #include "esp_random.h"
+#include "esp_timer.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstring>
+#include <unordered_map>
 
 namespace {
 
@@ -174,8 +179,9 @@ esp_err_t WledEffectsRuntime::start(AppConfig* cfg, LedEngineRuntime* led_runtim
   update_config(*cfg);
   running_ = true;
   if (!task_) {
+    // Pin to Core 1 for real-time LED rendering (isolated from network/system tasks)
     const BaseType_t res =
-        xTaskCreatePinnedToCore(task_entry, "wled_fx", 4096, this, 4, &task_, tskNO_AFFINITY);
+        xTaskCreatePinnedToCore(task_entry, "wled_fx", 4096, this, 5, &task_, 1);
     if (res != pdPASS) {
       running_ = false;
       task_ = nullptr;
@@ -277,6 +283,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   
   // Only process audio for LEDFx effects
   if (binding.effect.audio_link && is_ledfx) {
+    // Get audio metrics with timestamp for synchronization
     AudioMetrics metrics = led_audio_get_metrics();
     float energy = metrics.energy;
     const std::string channel = lower_copy(binding.audio_channel);
@@ -291,15 +298,27 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     const float beat = metrics.beat > 0.0f ? metrics.beat : (sinf(frame_idx * 0.12f) * 0.5f + 0.5f);
     
     float weighted = 0.0f;
-    // Check if custom frequency range is set (freq_min > 0 && freq_max > 0)
-    if (binding.effect.freq_min > 0.0f && binding.effect.freq_max > 0.0f) {
+    // Check if selected bands are configured
+    if (!binding.effect.selected_bands.empty()) {
+      // Use selected bands - average all selected band values
+      float sum = 0.0f;
+      size_t count = 0;
+      for (const auto& band_name : binding.effect.selected_bands) {
+        float band_val = led_audio_get_band_value(band_name);
+        if (band_val > 0.0f) {
+          sum += band_val;
+          ++count;
+        }
+      }
+      weighted = count > 0 ? sum / static_cast<float>(count) : energy * 0.7f;
+    } else if (binding.effect.freq_min > 0.0f && binding.effect.freq_max > 0.0f) {
       // Use custom frequency range
       weighted = led_audio_get_custom_energy(binding.effect.freq_min, binding.effect.freq_max);
       if (weighted <= 0.0001f) {
         weighted = energy * 0.7f;  // Fallback to overall energy
       }
     } else {
-      // Use default frequency bands (bass, mid, treble)
+      // Use default frequency bands (bass, mid, treble) based on reactive_mode
       float bass = metrics.bass > 0.0f ? metrics.bass : energy * 0.8f;
       float treble = metrics.treble > 0.0f ? metrics.treble : energy * 0.6f;
       float mid = metrics.mid > 0.0f ? metrics.mid : energy * 0.7f;
@@ -755,22 +774,82 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   if (!binding.ddp) {
     return false;
   }
+  
+  // Frame cache: reuse frame if same effect + same LED count + same frame_idx
+  // This is especially useful when same effect is used on multiple devices
   const uint16_t leds = device.leds == 0 ? 60 : device.leds;
-  const auto frame = render_frame(binding, leds, frame_idx, global_brightness, fps);
+  FrameCacheKey cache_key{binding.effect.effect, leds, frame_idx};
+  std::vector<uint8_t> frame;
+  
+  auto cache_it = frame_cache_.find(cache_key);
+  if (cache_it != frame_cache_.end()) {
+    frame = cache_it->second;  // Reuse cached frame
+  } else {
+    // Render new frame and cache it
+    frame = render_frame(binding, leds, frame_idx, global_brightness, fps);
+    // Only cache if cache is not too large (limit to 10 entries to avoid memory issues)
+    if (frame_cache_.size() < 10) {
+      frame_cache_[cache_key] = frame;
+    }
+  }
+  
   uint16_t port = kDefaultDdpPort;
   if (cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0) {
     port = cfg_ref_->mqtt.ddp_port;
   }
   const uint32_t channel = static_cast<uint32_t>(binding.segment_index == 0 ? 1 : binding.segment_index);
-  const bool ok = ddp_send_frame(ip, port, frame, channel, 0, seq_++);
+  
+  // Use cached address if available (faster than DNS resolution every time)
+  const uint64_t now_us = esp_timer_get_time();
+  auto addr_it = ddp_addr_cache_.find(ip);
+  bool use_cache = false;
+  
+  if (addr_it != ddp_addr_cache_.end() && addr_it->second.valid) {
+    const uint64_t age_us = now_us - addr_it->second.cached_at_us;
+    if (age_us < DNS_CACHE_TTL_US) {
+      use_cache = true;
+    } else {
+      // Cache expired, remove it
+      ddp_addr_cache_.erase(addr_it);
+    }
+  }
+  
+  bool ok = false;
+  if (use_cache) {
+    // Use cached address (much faster - no DNS resolution)
+    ok = ddp_send_frame_cached(&addr_it->second.addr, addr_it->second.addr_len, port, frame, channel, 0, seq_++);
+  } else {
+    // First time or cache expired - resolve and cache
+    ok = ddp_send_frame(ip, port, frame, channel, 0, seq_++);
+    if (ok) {
+      // Cache the resolved address for next time
+      struct sockaddr_storage addr;
+      socklen_t addr_len = sizeof(addr);
+      if (ddp_cache_resolve(ip, port, &addr, &addr_len)) {
+        CachedAddrInfo cached;
+        std::memcpy(&cached.addr, &addr, sizeof(addr));
+        cached.addr_len = addr_len;
+        cached.cached_at_us = now_us;
+        cached.valid = true;
+        ddp_addr_cache_[ip] = cached;
+      }
+    }
+  }
+  
   if (!ok) {
     ESP_LOGW(TAG, "DDP send failed -> %s:%u (device %s)", ip.c_str(), port, device.id.c_str());
+    // Invalidate cache on failure
+    ddp_addr_cache_.erase(ip);
   }
+  
   return ok;
 }
 
 void WledEffectsRuntime::task_loop() {
   uint32_t frame_idx = 0;
+  uint64_t last_audio_timestamp_us = 0;
+  uint64_t last_render_time_us = 0;
+  
   while (running_) {
     WledEffectsConfig fx{};
     std::vector<WledDeviceConfig> devices_snapshot;
@@ -793,6 +872,45 @@ void WledEffectsRuntime::task_loop() {
 
     const uint16_t fps = fx.target_fps == 0 ? 60 : std::clamp<uint16_t>(fx.target_fps, 1, 240);
     const TickType_t delay = pdMS_TO_TICKS(1000 / fps);
+    
+    // Cleanup old frame cache entries (keep only recent frames to avoid memory issues)
+    // Frame cache is per-frame, so we only need to keep a few frames
+    if (frame_idx % 10 == 0 && frame_cache_.size() > 5) {
+      // Remove oldest entries (simple: clear cache every 10 frames)
+      frame_cache_.clear();
+    }
+    
+    // Synchronization: Check if we should wait for audio timestamp
+    // This ensures LED effects are synchronized with audio playback on other Snapcast clients
+    AudioMetrics audio_metrics = led_audio_get_metrics();
+    const uint64_t now_us = esp_timer_get_time();
+    
+    // If audio has a timestamp and we're rendering audio-reactive effects, sync to it
+    bool needs_audio_sync = false;
+    for (const auto& binding : fx.bindings) {
+      if (binding.enabled && binding.effect.audio_link) {
+        needs_audio_sync = true;
+        break;
+      }
+    }
+    
+    if (needs_audio_sync && audio_metrics.timestamp_us > 0) {
+      // Calculate when we should render this frame based on audio timestamp
+      // We want to render slightly before the audio plays (account for LED update time)
+      const uint64_t led_update_time_us = 5000;  // ~5ms for LED update
+      const uint64_t target_render_time = audio_metrics.timestamp_us - led_update_time_us;
+      
+      if (target_render_time > now_us) {
+        // Wait until it's time to render (but don't wait too long - max 50ms)
+        const uint64_t wait_us = std::min(target_render_time - now_us, 50000ULL);
+        if (wait_us > 1000) {  // Only wait if > 1ms
+          vTaskDelay(pdMS_TO_TICKS((wait_us / 1000) + 1));
+        }
+      }
+      last_audio_timestamp_us = audio_metrics.timestamp_us;
+    }
+    
+    last_render_time_us = esp_timer_get_time();
 
     // Continue even if no WLED devices - we may have local segments to render
     const bool has_wled_bindings = !fx.bindings.empty() && !devices_snapshot.empty();
@@ -829,36 +947,67 @@ void WledEffectsRuntime::task_loop() {
     // Physical LEDs can use WLED effects (for visual consistency with WLED devices) or LEDFx effects (audio-reactive)
     // When audio is enabled (audio_link=true), effects react to music from Snapcast
     // This is the central controller: generates effects and renders locally to physical LEDs
+    // Optimized: batch render segments with same effect to reuse frames
     if (cfg_ref_ && led_runtime_) {
       const auto& assignments = cfg_ref_->led_engine.effects.assignments;
+      
+      // Group segments by effect (for frame caching optimization)
+      std::unordered_map<std::string, std::vector<const LedSegmentConfig*>> segments_by_effect;
       for (const auto& seg : segments) {
         if (!seg.enabled || seg.effect_source != "local") {
           continue;
         }
-        // Find effect assignment for this segment
         auto it = std::find_if(assignments.begin(), assignments.end(),
                                [&](const EffectAssignment& a) { return a.segment_id == seg.id; });
         if (it == assignments.end()) {
-          continue;  // No effect assigned, skip
+          continue;
         }
+        // Create cache key for grouping (effect + LED count + audio state)
+        std::string effect_key = it->effect + "_" + std::to_string(seg.led_count) + "_" + 
+                                 (it->audio_link ? "audio" : "noaudio");
+        segments_by_effect[effect_key].push_back(&seg);
+      }
+      
+      // Render each group (reuse frame for segments with same effect)
+      for (const auto& [effect_key, seg_group] : segments_by_effect) {
+        if (seg_group.empty()) continue;
+        
+        const auto& first_seg = *seg_group[0];
+        auto it = std::find_if(assignments.begin(), assignments.end(),
+                               [&](const EffectAssignment& a) { return a.segment_id == first_seg.id; });
+        if (it == assignments.end()) continue;
+        
         // Convert EffectAssignment to WledEffectBinding for rendering
-        // Support both WLED effects (for visual consistency) and LEDFx effects (audio-reactive)
-        // Both can be audio-reactive if audio_link=true
         WledEffectBinding local_binding{};
-        local_binding.device_id = seg.id;
+        local_binding.device_id = first_seg.id;
         local_binding.segment_index = 0;
         local_binding.enabled = true;
-        local_binding.ddp = false;  // Local rendering, not DDP
+        local_binding.ddp = false;
         local_binding.audio_channel = "mix";
         local_binding.effect = *it;
         
-        // Render frame for this segment (works for both WLED and LEDFx effects)
-        // Audio reactivity is applied if audio_link=true (works for both WLED and LEDFx)
-        const auto frame = render_frame(local_binding, seg.led_count, frame_idx, global_brightness, fps);
-        if (!frame.empty()) {
-          const esp_err_t res = led_runtime_->render_frame(frame, seg, 0, seg.led_count);
-          if (res != ESP_OK) {
-            ESP_LOGD(TAG, "Local render error %s for segment %s", esp_err_to_name(res), seg.id.c_str());
+        // Render frame once (reuse for all segments in group if same LED count)
+        const uint16_t common_led_count = first_seg.led_count;
+        FrameCacheKey cache_key{it->effect, common_led_count, frame_idx};
+        std::vector<uint8_t> frame;
+        
+        auto cache_it = frame_cache_.find(cache_key);
+        if (cache_it != frame_cache_.end()) {
+          frame = cache_it->second;
+        } else {
+          frame = render_frame(local_binding, common_led_count, frame_idx, global_brightness, fps);
+          if (frame_cache_.size() < 10) {
+            frame_cache_[cache_key] = frame;
+          }
+        }
+        
+        // Render to all segments in group
+        for (const auto* seg_ptr : seg_group) {
+          if (!frame.empty()) {
+            const esp_err_t res = led_runtime_->render_frame(frame, *seg_ptr, 0, seg_ptr->led_count);
+            if (res != ESP_OK) {
+              ESP_LOGD(TAG, "Local render error %s for segment %s", esp_err_to_name(res), seg_ptr->id.c_str());
+            }
           }
         }
       }

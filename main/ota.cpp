@@ -61,6 +61,7 @@ esp_err_t ota_trigger_update(const char* url) {
   s_url = url;
   s_state = OtaState::kInProgress;
   s_last_err = ESP_OK;
+  // Core 0: System task (OTA updates - network intensive)
   const BaseType_t task = xTaskCreatePinnedToCore(ota_task, "ota_task", 8192, nullptr, 5, nullptr, 0);
   if (task != pdPASS) {
     s_state = OtaState::kIdle;

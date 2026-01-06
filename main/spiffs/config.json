@@ -34,7 +34,6 @@
     "power_supply_watts": 30.0,
     "auto_power_limit": true,
     "parallel_outputs": 4,
-    "dedicate_core": true,
     "enable_dma": true,
     "segments": [],
     "audio": {

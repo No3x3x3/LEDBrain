@@ -59,5 +59,7 @@ extern "C" void app_main(void) {
 
   ddp_tx_init(s_cfg.mqtt);
 
+  // Core 0: System and network tasks (heartbeat, discovery, OTA, web server, MQTT, mDNS)
+  // Core 1: Real-time tasks (LED effects rendering, audio processing)
   xTaskCreatePinnedToCore(heartbeat_task, "heartbeat", 4096, nullptr, 5, nullptr, 0);
 }

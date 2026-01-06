@@ -1,4 +1,9 @@
+# IDE
 .idea/
+*.pyproj
+**/.DS_Store
+
+# Build artifacts
 build/
 build*/
 *.bin
@@ -6,14 +11,24 @@ build*/
 *.map
 *.o
 *.a
-*.pyc
-*.log
 *.ninja*
 *.bin_timestamp
+
+# Logs and temporary files
+*.log
+build.log
 *.tmp
 *.tsv
 *.json.tmp
+temp_*.txt
+
+# Python
+*.pyc
+__pycache__/
+
+# ESP-IDF config
 sdkconfig
 sdkconfig.old
-*.pyproj
-**/.DS_Store
+
+# Documentation duplicates
+README.txt

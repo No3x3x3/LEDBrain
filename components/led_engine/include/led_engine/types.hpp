@@ -50,6 +50,10 @@ struct LedSegmentConfig {
   LedMatrixConfig matrix{};
   uint16_t power_limit_ma{0};
   LedSegmentAudioConfig audio{};
+  // Color processing
+  float gamma_color{2.2f};
+  float gamma_brightness{2.2f};
+  bool apply_gamma{true};
 };
 
 struct SnapcastConfig {
@@ -110,6 +114,9 @@ struct EffectAssignment {
   // Custom frequency range for audio reactivity (0 = use default bands)
   float freq_min{0.0f};  // Minimum frequency in Hz (0 = use reactive_mode)
   float freq_max{0.0f};  // Maximum frequency in Hz (0 = use reactive_mode)
+  // Selected frequency bands for audio reactivity
+  // Empty = use reactive_mode, otherwise use selected bands
+  std::vector<std::string> selected_bands{};  // e.g. ["bass", "mid_low", "treble_high", "energy", "beat"]
 };
 
 struct VirtualSegmentMember {
@@ -142,7 +149,6 @@ struct LedHardwareConfig {
   float power_supply_watts{0.0f};
   bool auto_power_limit{false};
   uint8_t parallel_outputs{4};
-  bool dedicate_core{true};
   bool enable_dma{true};
   std::vector<LedSegmentConfig> segments{};
   std::vector<VirtualSegmentConfig> virtual_segments{};

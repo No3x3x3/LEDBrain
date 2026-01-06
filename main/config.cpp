@@ -456,9 +456,6 @@ void decode_led_segments(LedHardwareConfig& hw, cJSON* obj) {
   if (cJSON* outputs = cJSON_GetObjectItem(obj, "parallel_outputs"); cJSON_IsNumber(outputs)) {
     hw.parallel_outputs = static_cast<uint8_t>(std::max(1, static_cast<int>(outputs->valuedouble)));
   }
-  if (cJSON* core = cJSON_GetObjectItem(obj, "dedicate_core"); cJSON_IsBool(core)) {
-    hw.dedicate_core = cJSON_IsTrue(core);
-  }
   if (cJSON* dma = cJSON_GetObjectItem(obj, "enable_dma"); cJSON_IsBool(dma)) {
     hw.enable_dma = cJSON_IsTrue(dma);
   }
@@ -496,6 +493,15 @@ void decode_led_segments(LedHardwareConfig& hw, cJSON* obj) {
       if (cJSON* ena = cJSON_GetObjectItem(entry, "enabled"); cJSON_IsBool(ena)) seg.enabled = cJSON_IsTrue(ena);
       if (cJSON* rev = cJSON_GetObjectItem(entry, "reverse"); cJSON_IsBool(rev)) seg.reverse = cJSON_IsTrue(rev);
       if (cJSON* mir = cJSON_GetObjectItem(entry, "mirror"); cJSON_IsBool(mir)) seg.mirror = cJSON_IsTrue(mir);
+      if (cJSON* gamma_col = cJSON_GetObjectItem(entry, "gamma_color"); cJSON_IsNumber(gamma_col)) {
+        seg.gamma_color = static_cast<float>(gamma_col->valuedouble);
+      }
+      if (cJSON* gamma_br = cJSON_GetObjectItem(entry, "gamma_brightness"); cJSON_IsNumber(gamma_br)) {
+        seg.gamma_brightness = static_cast<float>(gamma_br->valuedouble);
+      }
+      if (cJSON* apply_gamma = cJSON_GetObjectItem(entry, "apply_gamma"); cJSON_IsBool(apply_gamma)) {
+        seg.apply_gamma = cJSON_IsTrue(apply_gamma);
+      }
       if (cJSON* matrix_en = cJSON_GetObjectItem(entry, "matrix_enabled"); cJSON_IsBool(matrix_en)) {
         seg.matrix_enabled = cJSON_IsTrue(matrix_en);
       }
@@ -532,7 +538,6 @@ void encode_led_segments(const LedHardwareConfig& hw, cJSON* obj) {
   cJSON_AddNumberToObject(obj, "power_supply_watts", hw.power_supply_watts);
   cJSON_AddBoolToObject(obj, "auto_power_limit", hw.auto_power_limit);
   cJSON_AddNumberToObject(obj, "parallel_outputs", hw.parallel_outputs);
-  cJSON_AddBoolToObject(obj, "dedicate_core", hw.dedicate_core);
   cJSON_AddBoolToObject(obj, "enable_dma", hw.enable_dma);
 
   cJSON* arr = cJSON_AddArrayToObject(obj, "segments");
@@ -562,6 +567,9 @@ void encode_led_segments(const LedHardwareConfig& hw, cJSON* obj) {
       cJSON_AddItemToObject(s, "matrix", matrix);
     }
     cJSON_AddNumberToObject(s, "power_limit_ma", seg.power_limit_ma);
+    cJSON_AddNumberToObject(s, "gamma_color", seg.gamma_color);
+    cJSON_AddNumberToObject(s, "gamma_brightness", seg.gamma_brightness);
+    cJSON_AddBoolToObject(s, "apply_gamma", seg.apply_gamma);
     if (cJSON* audio = encode_segment_audio(seg.audio)) {
       cJSON_AddItemToObject(s, "audio", audio);
     }
@@ -747,6 +755,15 @@ bool decode_effect_assignment(EffectAssignment& assign, cJSON* entry, bool allow
   if (cJSON* freq_max = cJSON_GetObjectItem(entry, "freq_max"); cJSON_IsNumber(freq_max)) {
     assign.freq_max = static_cast<float>(std::max(0.0, freq_max->valuedouble));
   }
+  if (cJSON* bands = cJSON_GetObjectItem(entry, "selected_bands"); cJSON_IsArray(bands)) {
+    assign.selected_bands.clear();
+    cJSON* band_item = nullptr;
+    cJSON_ArrayForEach(band_item, bands) {
+      if (cJSON_IsString(band_item)) {
+        assign.selected_bands.push_back(band_item->valuestring);
+      }
+    }
+  }
   return true;
 }
 
@@ -795,6 +812,14 @@ cJSON* encode_effect_assignment(const EffectAssignment& assign, bool include_seg
   cJSON_AddBoolToObject(a, "beat_shuffle", assign.beat_shuffle);
   cJSON_AddNumberToObject(a, "freq_min", assign.freq_min);
   cJSON_AddNumberToObject(a, "freq_max", assign.freq_max);
+  if (!assign.selected_bands.empty()) {
+    cJSON* bands_arr = cJSON_AddArrayToObject(a, "selected_bands");
+    if (bands_arr) {
+      for (const auto& band : assign.selected_bands) {
+        cJSON_AddItemToArray(bands_arr, cJSON_CreateString(band.c_str()));
+      }
+    }
+  }
   return a;
 }
 

@@ -191,7 +191,6 @@
   "psu_watts": "PSU power (W)",
   "auto_power_limit": "Auto current from PSU",
   "led_parallel_outputs": "Parallel outputs",
-  "led_dedicated_core": "Dedicated core",
   "led_enable_dma": "DMA acceleration",
   "led_psu_hint": "Feed LEDs directly from the PSU and share ground with the controller.",
   "power_summary_auto": "Limiting to {milliamps} mA (~{amps} A) from {watts} W / {volts} V supply.",
