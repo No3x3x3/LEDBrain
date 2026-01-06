@@ -171,7 +171,16 @@ Access the web interface at:
 
 ## License
 
-[Add your license here]
+This project is licensed under the **MIT License**. See the main [LICENSE](../LICENSE) file for details.
+
+### Third-Party Components
+
+LEDBrain uses effects and algorithms inspired by:
+- **WLED** (MIT License) - LED effect algorithms
+- **LEDFx** (GPL-3.0 License) - Audio-reactive visualization techniques
+- **ESP-IDF** (Apache License 2.0) - ESP32 framework
+
+All effect implementations are reimplemented for ESP32-P4 and adapted for real-time audio reactivity.
 
 ## Acknowledgments
 

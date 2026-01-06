@@ -202,7 +202,19 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-[Add your license here]
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+### Third-Party Attributions
+
+LEDBrain uses effects and algorithms inspired by:
+
+- **[WLED](https://github.com/Aircoookie/WLED)** - MIT License - LED effect algorithms
+- **[LEDFx](https://github.com/LedFx/LedFx)** - GPL-3.0 License - Audio-reactive visualization techniques
+- **[ESP-IDF](https://github.com/espressif/esp-idf)** - Apache License 2.0 - ESP32 framework
+
+All effect implementations are reimplemented for ESP32-P4 platform and adapted for real-time audio reactivity. Original projects retain their respective copyrights.
+
+See [LICENSE](LICENSE) for full license text and attributions.
 
 ## 🙏 Acknowledgments
 
