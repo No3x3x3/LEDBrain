@@ -6,13 +6,16 @@
 # Build artifacts
 build/
 build*/
-*.bin
 *.elf
 *.map
 *.o
 *.a
 *.ninja*
 *.bin_timestamp
+
+# Binary files (except releases)
+*.bin
+!releases/*.bin
 
 # Logs and temporary files
 *.log
