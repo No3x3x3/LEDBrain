@@ -15,3 +15,4 @@ bool matrix_config_valid(const LedMatrixConfig& matrix);
 // Get total LED count for matrix
 uint16_t matrix_total_leds(const LedMatrixConfig& matrix);
 
+

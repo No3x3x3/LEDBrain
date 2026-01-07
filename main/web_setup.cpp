@@ -606,18 +606,43 @@ static esp_err_t api_ota_upload(httpd_req_t* req) {
   bool in_file_data = false;
   size_t total_received = 0;
   const size_t content_length = req->content_len;
+  bool connection_closed = false;
+  int consecutive_timeouts = 0;
+  const int max_timeouts = 100; // Allow up to 100 consecutive timeouts (about 50 seconds with default timeout)
   
-  while (total_received < content_length) {
+  ESP_LOGI(TAG, "OTA upload: content_length=%zu", content_length);
+  
+  // Read until we have all data or connection closes
+  // If content_length is 0, we read until we find the end boundary
+  while (!connection_closed && (content_length == 0 || total_received < content_length)) {
     int recv_len = httpd_req_recv(req, buffer.data(), chunk_size);
     if (recv_len <= 0) {
       if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+        consecutive_timeouts++;
+        if (consecutive_timeouts > max_timeouts) {
+          ESP_LOGE(TAG, "OTA upload: too many timeouts");
+          ota_abort_upload();
+          return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Upload timeout");
+        }
+        // Check if we have end boundary in accumulated data
+        if (in_file_data && accumulated_data.find(boundary_end) != std::string::npos) {
+          connection_closed = true;
+          break;
+        }
         continue;
       }
-      ESP_LOGE(TAG, "OTA upload: recv failed");
-      ota_finish_upload();  // This will abort
+      // Connection closed or error
+      if (recv_len == 0 || recv_len == HTTPD_SOCK_ERR_FAIL) {
+        connection_closed = true;
+        ESP_LOGI(TAG, "OTA upload: connection closed, total_received=%zu", total_received);
+        break;
+      }
+      ESP_LOGE(TAG, "OTA upload: recv failed, error=%d", recv_len);
+      ota_abort_upload();
       return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive failed");
     }
     
+    consecutive_timeouts = 0; // Reset timeout counter on successful receive
     total_received += recv_len;
     accumulated_data.append(buffer.data(), recv_len);
     
@@ -628,9 +653,9 @@ static esp_err_t api_ota_upload(httpd_req_t* req) {
         size_t boundary_start = accumulated_data.find(boundary_marker);
         if (boundary_start == std::string::npos) {
           // Haven't found boundary yet, keep accumulating
-          if (accumulated_data.length() > 1024) {
+          if (accumulated_data.length() > 4096) {
             // Too much data without boundary, something's wrong
-            ESP_LOGE(TAG, "OTA upload: boundary not found");
+            ESP_LOGE(TAG, "OTA upload: boundary not found after %zu bytes", accumulated_data.length());
             ota_abort_upload();
             return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid multipart data");
           }
@@ -652,7 +677,7 @@ static esp_err_t api_ota_upload(httpd_req_t* req) {
       }
       
       if (in_file_data) {
-        // Look for end boundary
+        // Look for end boundary (both regular and final)
         size_t boundary_pos = accumulated_data.find(boundary_marker);
         if (boundary_pos != std::string::npos) {
           // Write data before boundary
@@ -664,8 +689,16 @@ static esp_err_t api_ota_upload(httpd_req_t* req) {
           if (!file_data.empty()) {
             err = ota_write_data(file_data.data(), file_data.length());
             if (err != ESP_OK) {
+              ESP_LOGE(TAG, "OTA upload: write failed");
+              ota_abort_upload();
               return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
             }
+          }
+          // Check if this is the final boundary (boundary-- instead of just boundary)
+          std::string remaining = accumulated_data.substr(boundary_pos);
+          if (remaining.find(boundary_end) == 0) {
+            connection_closed = true;
+            ESP_LOGI(TAG, "OTA upload: found final boundary");
           }
           // Done with file data
           accumulated_data.clear();
@@ -673,10 +706,14 @@ static esp_err_t api_ota_upload(httpd_req_t* req) {
           break;
         } else {
           // Check if we have enough data to write (keep some for boundary check)
-          if (accumulated_data.length() > boundary_marker.length() + 100) {
-            size_t write_len = accumulated_data.length() - boundary_marker.length() - 100;
+          // Keep more buffer to handle boundary detection better
+          size_t reserve_size = boundary_marker.length() + 200;
+          if (accumulated_data.length() > reserve_size) {
+            size_t write_len = accumulated_data.length() - reserve_size;
             err = ota_write_data(accumulated_data.data(), write_len);
             if (err != ESP_OK) {
+              ESP_LOGE(TAG, "OTA upload: write failed");
+              ota_abort_upload();
               return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
             }
             accumulated_data = accumulated_data.substr(write_len);
@@ -686,6 +723,18 @@ static esp_err_t api_ota_upload(httpd_req_t* req) {
           }
         }
       }
+    }
+    
+    // Log progress periodically
+    if (content_length > 0) {
+      size_t progress_step = content_length / 10;
+      if (progress_step > 0 && (total_received % progress_step == 0 || total_received == content_length)) {
+        ESP_LOGI(TAG, "OTA upload progress: %zu / %zu bytes (%.1f%%)", 
+                 total_received, content_length, (100.0f * total_received) / content_length);
+      }
+    } else if (total_received > 0 && (total_received % (1024 * 100) == 0)) {
+      // Log every 100KB when content_length is unknown
+      ESP_LOGI(TAG, "OTA upload progress: %zu bytes received", total_received);
     }
   }
   
@@ -701,17 +750,23 @@ static esp_err_t api_ota_upload(httpd_req_t* req) {
       if (!file_data.empty()) {
         err = ota_write_data(file_data.data(), file_data.length());
         if (err != ESP_OK) {
+          ESP_LOGE(TAG, "OTA upload: final write failed");
+          ota_abort_upload();
           return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
         }
       }
     } else {
-      // Write all remaining data
+      // Write all remaining data (no boundary found, might be end of stream)
       err = ota_write_data(accumulated_data.data(), accumulated_data.length());
       if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA upload: final write failed");
+        ota_abort_upload();
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
       }
     }
   }
+  
+  ESP_LOGI(TAG, "OTA upload: finished reading, total_received=%zu", total_received);
   
   // Finish OTA upload (this will validate and reboot)
   err = ota_finish_upload();
@@ -759,6 +814,10 @@ void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime, WledEffectsRunt
   httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
   server_config.uri_match_fn = httpd_uri_match_wildcard;
   server_config.max_uri_handlers = 27;
+  // Increase timeouts for large OTA uploads
+  // keep_alive_timeout is not available in this ESP-IDF version
+  server_config.recv_wait_timeout = 10;   // 10 seconds
+  server_config.send_wait_timeout = 10;   // 10 seconds
   httpd_handle_t server = nullptr;
   ESP_ERROR_CHECK(httpd_start(&server, &server_config));
 

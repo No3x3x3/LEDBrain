@@ -143,6 +143,122 @@ const EFFECT_LIBRARY = [
     ],
   },
 ];
+
+// Default values for each effect - matching WLED and LEDFx defaults
+// Based on WLED source code and LEDFx documentation
+const EFFECT_DEFAULTS = {
+  // WLED Effects
+  "Solid": { brightness: 255, intensity: 128, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+  "Blink": { brightness: 255, intensity: 128, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+  "Breathe": { brightness: 255, intensity: 128, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+  "Chase": { brightness: 255, intensity: 128, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+  "Colorloop": { brightness: 255, intensity: 128, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+  "Rainbow": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#00ff00", color3: "#0000ff" },
+  "Rainbow Runner": { brightness: 255, intensity: 128, speed: 192, color1: "#ff0000", color2: "#00ff00", color3: "#0000ff" },
+  "Rainbow Bands": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#00ff00", color3: "#0000ff" },
+  "Rain": { brightness: 255, intensity: 128, speed: 128, color1: "#0033ff", color2: "#0066ff", color3: "#0099ff" },
+  "Rain (Dual)": { brightness: 255, intensity: 128, speed: 128, color1: "#0033ff", color2: "#0066ff", color3: "#0099ff" },
+  "Meteor": { brightness: 255, intensity: 128, speed: 128, color1: "#ff6600", color2: "#ffaa00", color3: "#ffffff" },
+  "Meteor Smooth": { brightness: 255, intensity: 128, speed: 128, color1: "#ff6600", color2: "#ffaa00", color3: "#ffffff" },
+  "Power+": { brightness: 255, intensity: 128, speed: 128, color1: "#00ff00", color2: "#ffff00", color3: "#ff0000" },
+  "Power Cycle": { brightness: 255, intensity: 128, speed: 128, color1: "#00ff00", color2: "#ffff00", color3: "#ff0000" },
+  "Energy Flow": { brightness: 255, intensity: 128, speed: 128, color1: "#00ff00", color2: "#ffff00", color3: "#ff0000" },
+  "Energy Burst": { brightness: 255, intensity: 128, speed: 192, color1: "#00ff00", color2: "#ffff00", color3: "#ff0000" },
+  "Energy Waves": { brightness: 255, intensity: 128, speed: 192, color1: "#00ff00", color2: "#ffff00", color3: "#ff0000" },
+  "Candle": { brightness: 255, intensity: 128, speed: 128, color1: "#ff6600", color2: "#ffaa00", color3: "#ffffff" },
+  "Candle Multi": { brightness: 255, intensity: 128, speed: 128, color1: "#ff6600", color2: "#ffaa00", color3: "#ffffff" },
+  "Matrix": { brightness: 255, intensity: 128, speed: 128, color1: "#00ff00", color2: "#00aa00", color3: "#003300" },
+  "Waves": { brightness: 255, intensity: 128, speed: 128, color1: "#0033ff", color2: "#0066ff", color3: "#0099ff" },
+  "Plasma": { brightness: 255, intensity: 128, speed: 128, color1: "#ff00ff", color2: "#00ffff", color3: "#ffff00" },
+  "Ripple Flow": { brightness: 255, intensity: 128, speed: 128, color1: "#00ffff", color2: "#0099ff", color3: "#0033ff" },
+  "Heartbeat": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#ff6600", color3: "#ffffff" },
+  "Aura": { brightness: 255, intensity: 128, speed: 128, color1: "#ff00ff", color2: "#00ffff", color3: "#ffff00" },
+  "Hyperspace": { brightness: 255, intensity: 128, speed: 192, color1: "#ff00ff", color2: "#00ffff", color3: "#0000ff" },
+  "Ripple": { brightness: 255, intensity: 128, speed: 128, color1: "#00ffff", color2: "#0099ff", color3: "#0033ff" },
+  "Pacifica": { brightness: 255, intensity: 128, speed: 128, color1: "#0033ff", color2: "#0066ff", color3: "#0099ff" },
+  "Theater": { brightness: 255, intensity: 128, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+  "Scanner": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#00ff00", color3: "#0000ff" },
+  "Scanner Dual": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#00ff00", color3: "#0000ff" },
+  "Noise": { brightness: 255, intensity: 128, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+  "Sinelon": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#00ff00", color3: "#0000ff" },
+  "Fire 2012": { brightness: 255, intensity: 128, speed: 128, color1: "#ff6600", color2: "#ffaa00", color3: "#ffffff" },
+  "Fireworks": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#ffff00", color3: "#ffffff" },
+  "Beat Pulse": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#ff6600", color3: "#ffffff" },
+  "Beat Bars": { brightness: 255, intensity: 128, speed: 128, color1: "#ff0000", color2: "#00ff00", color3: "#0000ff" },
+  "Beat Scatter": { brightness: 255, intensity: 128, speed: 192, color1: "#ff0000", color2: "#00ff00", color3: "#0000ff" },
+  "Beat Light": { brightness: 255, intensity: 128, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+  "Strobe": { brightness: 255, intensity: 255, speed: 128, color1: "#ffffff", color2: "#996600", color3: "#0033ff" },
+};
+
+// Function to get default values for an effect
+function getEffectDefaults(effectName, engine) {
+  if (!effectName) {
+    // Return generic defaults
+    return {
+      brightness: 255,
+      intensity: 128,
+      speed: 128,
+      color1: "#ffffff",
+      color2: "#996600",
+      color3: "#0033ff",
+    };
+  }
+  
+  // Check if we have specific defaults for this effect
+  const defaults = EFFECT_DEFAULTS[effectName];
+  if (defaults) {
+    return { ...defaults };
+  }
+  
+  // Fallback to generic defaults
+  return {
+    brightness: 255,
+    intensity: 128,
+    speed: 128,
+    color1: "#ffffff",
+    color2: "#996600",
+    color3: "#0033ff",
+  };
+}
+
+// Function to apply effect defaults to an assignment when effect is first selected
+function applyEffectDefaults(assignment, effectName, engine, forceApply = false) {
+  if (!assignment || !effectName) return;
+  
+  const defaults = getEffectDefaults(effectName, engine);
+  
+  // When forceApply is true (effect just selected), always apply defaults
+  // Otherwise, only apply if values are at generic defaults (preserve user customizations)
+  if (forceApply) {
+    assignment.brightness = defaults.brightness;
+    assignment.intensity = defaults.intensity;
+    assignment.speed = defaults.speed;
+    assignment.color1 = defaults.color1;
+    assignment.color2 = defaults.color2;
+    assignment.color3 = defaults.color3;
+  } else {
+    // Only update if values are at generic defaults
+    if (typeof assignment.brightness !== "number" || assignment.brightness === 255) {
+      assignment.brightness = defaults.brightness;
+    }
+    if (typeof assignment.intensity !== "number" || assignment.intensity === 128) {
+      assignment.intensity = defaults.intensity;
+    }
+    if (typeof assignment.speed !== "number" || assignment.speed === 128) {
+      assignment.speed = defaults.speed;
+    }
+    if (!assignment.color1 || assignment.color1 === "#ffffff") {
+      assignment.color1 = defaults.color1;
+    }
+    if (!assignment.color2 || assignment.color2 === "#996600") {
+      assignment.color2 = defaults.color2;
+    }
+    if (!assignment.color3 || assignment.color3 === "#0033ff") {
+      assignment.color3 = defaults.color3;
+    }
+  }
+}
+
 const OTA_RELEASE_URL = "https://api.github.com/repos/No3x3x3/LEDBrain/releases/latest";
 const MAX_BRIGHTNESS = 255;
 
@@ -2290,24 +2406,26 @@ function ensureEffectAssignment(segmentId) {
   if (!led) return null;
   let assignment = led.effects.assignments.find((a) => a.segment_id === segmentId);
   if (!assignment) {
+    const defaultEffect = "Solid";
+    const defaults = getEffectDefaults(defaultEffect, led.effects.default_engine || "wled");
     assignment = {
       segment_id: segmentId,
       engine: led.effects.default_engine || "wled",  // Default to WLED for physical segments (for visual consistency)
-      effect: "Solid",  // Default to simple WLED effect, user can change to audio-reactive
+      effect: defaultEffect,  // Default to simple WLED effect, user can change to audio-reactive
       preset: "",
       audio_link: false,  // User can enable audio reactivity if needed
       audio_profile: "wled_reactive",
-      brightness: 255,
-      intensity: 128,
-      speed: 128,
+      brightness: defaults.brightness,
+      intensity: defaults.intensity,
+      speed: defaults.speed,
       audio_mode: "spectrum",
       direction: "forward",
       scatter: 0,
       fade_in: 0,
       fade_out: 0,
-      color1: "#ffffff",
-      color2: "#ff6600",
-      color3: "#0033ff",
+      color1: defaults.color1,
+      color2: defaults.color2,
+      color3: defaults.color3,
       palette: "",
       gradient: "",
       brightness_override: 0,
@@ -2341,9 +2459,15 @@ function ensureEffectAssignment(segmentId) {
   assignment.scatter = typeof assignment.scatter === "number" ? assignment.scatter : 0;
   assignment.fade_in = typeof assignment.fade_in === "number" ? assignment.fade_in : 0;
   assignment.fade_out = typeof assignment.fade_out === "number" ? assignment.fade_out : 0;
-  assignment.color1 = assignment.color1 || "#ffffff";
-  assignment.color2 = assignment.color2 || "#ff6600";
-  assignment.color3 = assignment.color3 || "#0033ff";
+  // Apply effect-specific defaults if effect is set and values are at generic defaults
+  if (assignment.effect) {
+    applyEffectDefaults(assignment, assignment.effect, assignment.engine || "wled", false);
+  } else {
+    // Fallback to generic defaults
+    assignment.color1 = assignment.color1 || "#ffffff";
+    assignment.color2 = assignment.color2 || "#996600";
+    assignment.color3 = assignment.color3 || "#0033ff";
+  }
   assignment.palette = assignment.palette || "";
   assignment.gradient = assignment.gradient || "";
   assignment.brightness_override =
@@ -2977,7 +3101,30 @@ function handleEffectRowClick(event) {
 function handleEffectPickerChange(event) {
   const assign = getSelectedFxAssignment();
   if (!assign) return;
-  assign.effect = event.target.value || "";
+  const oldEffect = assign.effect;
+  const newEffect = event.target.value || "";
+  
+  // If effect changed, apply defaults for the new effect
+  if (newEffect && newEffect !== oldEffect) {
+    // Find the engine for this effect
+    let engine = assign.engine || "wled";
+    for (const group of EFFECT_LIBRARY) {
+      for (const eff of group.effects) {
+        if (eff.name === newEffect) {
+          engine = eff.engine || engine;
+          break;
+        }
+      }
+    }
+    
+    // Update engine if needed
+    assign.engine = engine;
+    
+    // Apply effect-specific defaults
+    applyEffectDefaults(assign, newEffect, engine, true);
+  }
+  
+  assign.effect = newEffect;
   const led = ensureLedEngineConfig();
   renderEffectRows(led);
   renderFxDetail();

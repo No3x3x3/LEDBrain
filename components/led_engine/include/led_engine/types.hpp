@@ -90,7 +90,7 @@ struct EffectAssignment {
   uint16_t fade_in{0};
   uint16_t fade_out{0};
   std::string color1{"#ffffff"};
-  std::string color2{"#ff6600"};
+  std::string color2{"#996600"};
   std::string color3{"#0033ff"};
   std::string palette{};
   std::string gradient{};

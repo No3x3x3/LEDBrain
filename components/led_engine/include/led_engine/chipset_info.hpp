@@ -42,3 +42,4 @@ bool chipset_supports_rgbw(const std::string& chipset_name);
 // Get bytes per pixel (3 for RGB, 4 for RGBW)
 uint8_t chipset_bytes_per_pixel(const std::string& chipset_name);
 
+

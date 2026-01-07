@@ -70,3 +70,4 @@ uint16_t matrix_total_leds(const LedMatrixConfig& matrix) {
     return matrix.width * matrix.height;
 }
 
+

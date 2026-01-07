@@ -79,3 +79,4 @@ uint8_t chipset_bytes_per_pixel(const std::string& chipset_name) {
   return info->supports_rgbw ? 4 : 3;
 }
 
+
