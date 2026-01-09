@@ -1,0 +1,37 @@
+# IDE
+.idea/
+*.pyproj
+**/.DS_Store
+
+# Build artifacts
+build/
+build*/
+*.elf
+*.map
+*.o
+*.a
+*.ninja*
+*.bin_timestamp
+
+# Binary files (except releases)
+*.bin
+!releases/*.bin
+
+# Logs and temporary files
+*.log
+build.log
+*.tmp
+*.tsv
+*.json.tmp
+temp_*.txt
+
+# Python
+*.pyc
+__pycache__/
+
+# ESP-IDF config
+sdkconfig
+sdkconfig.old
+
+# Documentation duplicates
+README.txt

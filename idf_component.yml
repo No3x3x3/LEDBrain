@@ -1,0 +1,4 @@
+dependencies:
+  idf: '>=5.5.0'
+  espressif/esp-dl: "^3.2.0"
+  espressif/esp-dsp: "^1.0.0"

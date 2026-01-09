@@ -1,0 +1,9 @@
+# Name,   Type, SubType, Offset,   Size,    Flags
+# Note: SD card (64GB) will be used for data storage, flash for firmware
+# OTA partitions for wireless updates (must fit in 4MB flash)
+# Increased OTA partition size to accommodate larger firmware with WiFi C6 control
+nvs,      data, nvs,     0x9000,   0x6000,
+otadata,  data, ota,     0xF000,   0x2000,
+phy_init, data, phy,     0x11000,  0x1000,
+ota_0,    app,  ota_0,   0x20000,  0x190000,
+ota_1,    app,  ota_1,   0x1B0000, 0x190000,

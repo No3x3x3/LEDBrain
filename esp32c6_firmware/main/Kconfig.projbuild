@@ -1,0 +1,46 @@
+menu "LEDBrain C6 Coprocessor Configuration"
+
+    config ESP_WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            SSID (network name) for the WiFi network to connect to.
+
+    config ESP_WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+        help
+            WiFi password (WPA or WPA2) for the network.
+
+    config ESP_MAXIMUM_RETRY
+        int "Maximum WiFi Connection Retries"
+        default 5
+        help
+            Maximum number of retries when connecting to WiFi AP.
+
+    config EXAMPLE_UART_TX_PIN
+        int "UART TX Pin (ESP32-C6 to ESP32-P4)"
+        default 18
+        range 0 30
+        help
+            GPIO pin number for UART TX (ESP32-C6 TX -> ESP32-P4 RX).
+            Default: 18 (can be adjusted based on board schematic)
+
+    config EXAMPLE_UART_RX_PIN
+        int "UART RX Pin (ESP32-P4 to ESP32-C6)"
+        default 17
+        range 0 30
+        help
+            GPIO pin number for UART RX (ESP32-P4 TX -> ESP32-C6 RX).
+            Default: 17 (can be adjusted based on board schematic)
+
+    config EXAMPLE_UART_BAUDRATE
+        int "UART Baudrate"
+        default 921600
+        range 115200 3000000
+        help
+            Baudrate for PPP communication over UART.
+            Higher baudrate = better performance (up to 3Mbps tested).
+
+endmenu
+
