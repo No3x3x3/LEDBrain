@@ -40,12 +40,12 @@ static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_FAIL_BIT      BIT1
 
 static int s_retry_num = 0;
-static esp_netif_t *s_ap_netif = nullptr;
-static esp_netif_t *s_sta_netif = nullptr;
+static esp_netif_t *s_ap_netif = NULL;
+static esp_netif_t *s_sta_netif = NULL;
 
-// Control UART configuration (UART2 for control commands)
-// Note: UART0 is used for PPP (GPIO18/17), so UART2 uses different pins
-#define CTRL_UART_PORT UART_NUM_2
+// Control UART configuration (UART1 for control commands)
+// Note: UART0 is used for PPP (GPIO18/17), so UART1 uses different pins
+#define CTRL_UART_PORT UART_NUM_1
 #define CTRL_UART_TX 19  // ESP32-C6 TX -> ESP32-P4 RX (UART2, GPIO19)
 #define CTRL_UART_RX 20  // ESP32-P4 TX -> ESP32-C6 RX (UART2, GPIO20)
 #define CTRL_UART_BAUD 115200
@@ -192,7 +192,7 @@ static esp_err_t wifi_start_ap_mode(void)
 }
 
 /* Start WiFi STA mode (with optional AP in background) */
-static esp_err_t wifi_start_sta_mode(const wifi_config_t *sta_config, bool keep_ap)
+static esp_err_t wifi_start_sta_mode(wifi_config_t *sta_config, bool keep_ap)
 {
     if (keep_ap) {
         // Start AP mode for easier access
@@ -205,7 +205,7 @@ static esp_err_t wifi_start_sta_mode(const wifi_config_t *sta_config, bool keep_
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     }
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, sta_config));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, (wifi_config_t*)sta_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
     if (keep_ap) {
@@ -557,10 +557,8 @@ void app_main(void)
         
         /* Check WiFi status periodically */
         wifi_ap_record_t ap_info;
-        bool sta_connected = false;
         
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK && ap_info.rssi != 0) {
-            sta_connected = true;
             ESP_LOGI(TAG, "WiFi status: Connected to %s (RSSI: %d dBm)",
                      ap_info.ssid, ap_info.rssi);
             

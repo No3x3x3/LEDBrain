@@ -11,5 +11,6 @@ idf_component_register(
         esp_driver_uart
     PRIV_REQUIRES
         lwip
+        esp_driver_gpio
 )
 
