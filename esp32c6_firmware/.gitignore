@@ -1,6 +1,5 @@
 build/
 sdkconfig
 sdkconfig.old
-managed_components/
-dependencies.lock
+# Note: managed_components/ and dependencies.lock are intentionally committed as part of the project
 

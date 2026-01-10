@@ -29,9 +29,19 @@ temp_*.txt
 *.pyc
 __pycache__/
 
-# ESP-IDF config
+# ESP-IDF config (generated files)
 sdkconfig
 sdkconfig.old
+# But keep defaults and important configs
+!sdkconfig.defaults
+!sdkconfig.defaults.txt
+!esp32c6_firmware/sdkconfig.defaults
+
+# Dependencies and managed components (should be committed)
+!dependencies.lock
+!esp32c6_firmware/dependencies.lock
+!managed_components/
+!esp32c6_firmware/managed_components/
 
 # Documentation duplicates
 README.txt

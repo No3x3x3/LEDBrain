@@ -6,7 +6,7 @@ Płytka **JC-ESP32P4-M3-DEV** zawiera dwa mikrokontrolery:
 - **ESP32-P4** - główny procesor (programowany przez port USB-C głównej płytki)
 - **ESP32-C6** - współprocesor WiFi (wymaga osobnego programowania)
 
-ESP32-C6 **nie ma wbudowanego WiFi**, dlatego potrzebuje ESP32-C6 jako współprocesora WiFi.
+ESP32-P4 **nie ma wbudowanego WiFi**, dlatego potrzebuje ESP32-C6 jako współprocesora WiFi.
 
 ## 🔌 Opcje połączenia z ESP32-C6
 

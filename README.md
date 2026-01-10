@@ -4,6 +4,10 @@
 
 LEDBrain is a comprehensive LED control system that brings together the best of both worlds: **WLED's visual effects** and **LEDFx's audio-reactive capabilities**. Perfect for home automation, music visualization, and synchronized lighting across multiple devices.
 
+**Architecture**: LEDBrain uses a dual-chip architecture:
+- **ESP32-P4**: Main controller (no built-in WiFi) - handles LED effects, audio processing, web interface
+- **ESP32-C6**: WiFi coprocessor (included firmware) - provides WiFi connectivity via PPP over UART
+
 ## ✨ Key Features
 
 ### 🎨 Dual Effect Engine
@@ -40,44 +44,66 @@ LEDBrain is a comprehensive LED control system that brings together the best of 
 
 ### Supported Hardware
 
-- **ESP32-P4** development board (tested on JC-ESP32P4-M3-DEV)
+- **ESP32-P4** development board (tested on JC-ESP32P4-M3-DEV) - Main controller
+- **ESP32-C6** development board - WiFi coprocessor (required for WiFi connectivity)
 - **Ethernet PHY** (LAN8720, IP101, or DP83848) - configure in `main/eth_init.cpp`
 - **WS2812/SK6812 LED strips** (optional, for physical LED control)
-- **Ethernet cable** for network connection
+- **Ethernet cable** for network connection (optional, WiFi via ESP32-C6 available)
 
 ### Recommended Hardware
 
 - **JC-ESP32P4-M3-DEV** development board (full documentation in `docs/hardware/`)
+- **ESP32-C6** board connected via UART for WiFi functionality
 - High-quality 5V power supply for LED strips
-- Ethernet connection for stable network
+- Ethernet connection for stable network (or WiFi via ESP32-C6)
 
 For detailed hardware specifications, schematics, and pinout information, see [Hardware Documentation](docs/README.md).
 
 ## Building
 
+LEDBrain consists of **two separate firmware projects**:
+1. **Main firmware** (ESP32-P4) - Main controller with LED effects
+2. **WiFi coprocessor firmware** (ESP32-C6) - WiFi connectivity for ESP32-P4
+
 ### Prerequisites
 
 - ESP-IDF 5.5.0 or later
 - Python 3.8+
+- Two USB-C ports (one for ESP32-P4, one for ESP32-C6)
 
 ### Build Steps
 
+#### 1. Build ESP32-P4 Main Firmware
+
 ```bash
-# Set target
+# From project root
 idf.py set-target esp32p4
-
-# Build
 idf.py build
-
-# Flash and monitor
 idf.py flash monitor
 ```
+
+#### 2. Build ESP32-C6 WiFi Coprocessor Firmware
+
+```bash
+# From project root
+cd esp32c6_firmware
+idf.py set-target esp32c6
+idf.py build
+idf.py -p COM5 flash  # Adjust COM port as needed
+```
+
+See `esp32c6_firmware/FLASHING_GUIDE.md` for detailed flashing instructions.
+
+**Note**: Both firmware must be flashed for full functionality. The ESP32-C6 firmware provides WiFi connectivity to ESP32-P4 via PPP over UART.
 
 ## Configuration
 
 After first boot, access the web interface at `http://ledbrain.local`:
 
-1. **Network**: Configure Ethernet (DHCP or static IP)
+1. **Network**: 
+   - Configure Ethernet (DHCP or static IP) - preferred method
+   - Or configure WiFi via ESP32-C6 coprocessor (if Ethernet not available)
+   - The system automatically switches between Ethernet and WiFi based on connection status
 2. **MQTT**: Set up MQTT broker connection (optional, for Home Assistant)
 3. **LED Segments**: Configure physical LED strips (chipset, color order, matrix layout)
 4. **WLED Devices**: Add remote WLED devices for synchronized effects
@@ -139,10 +165,13 @@ Two methods available:
 
 ```
 LEDBrain/
-├── main/                          # Main application code
+├── main/                          # ESP32-P4 main application code
 │   ├── wled_effects.cpp           # WLED effects runtime (30+ effects)
 │   ├── ledfx_effects.cpp          # LEDFx effects runtime (10+ effects)
 │   ├── web_setup.cpp              # Web server and REST API
+│   ├── wifi_c6.cpp                # WiFi via ESP32-C6 coprocessor
+│   ├── wifi_c6_ctrl.cpp           # Control protocol for ESP32-C6
+│   ├── eth_init.cpp               # Ethernet initialization
 │   ├── ota.cpp                    # OTA update handling
 │   ├── ddp_tx.cpp                 # DDP protocol for WLED devices
 │   ├── wled_discovery.cpp         # WLED device auto-discovery
@@ -152,6 +181,13 @@ LEDBrain/
 │       ├── app.js                 # Frontend JavaScript
 │       ├── style.css              # Styling
 │       └── lang_*.json            # Language files
+├── esp32c6_firmware/              # ESP32-C6 WiFi coprocessor firmware
+│   ├── main/
+│   │   └── main.c                 # WiFi coprocessor code (PPP server, AP/STA)
+│   ├── FLASHING_GUIDE.md          # Flashing instructions
+│   ├── AP_PROVISIONING.md         # WiFi provisioning documentation
+│   ├── CMakeLists.txt             # Build configuration
+│   └── managed_components/        # ESP-IDF managed components
 ├── components/
 │   ├── led_engine/                # LED control engine
 │   │   ├── led_engine.cpp         # Main engine logic
@@ -166,7 +202,7 @@ LEDBrain/
 │       ├── JC-ESP32P4-M3-DEV Specifications-EN.pdf
 │       ├── Getting started JC-ESP32P4-M3-DEV.pdf
 │       └── schematics/            # Schematic diagrams
-└── partitions.csv                 # Partition table
+└── partitions.csv                 # ESP32-P4 partition table
 ```
 
 ## 📚 Documentation
@@ -178,12 +214,19 @@ LEDBrain/
 
 ## 🚀 Quick Start
 
-1. **Flash firmware** (see [Building](#building) section)
-2. **Access web interface** at `http://ledbrain.local` or device IP
-3. **Configure network** (Ethernet settings)
-4. **Add LED segments** (physical strips) or **WLED devices** (remote)
-5. **Assign effects** to segments/devices
-6. **Enable audio** (if using Snapcast) for reactive effects
+1. **Flash both firmware**:
+   - Flash ESP32-P4 main firmware (see [Building](#building) section)
+   - Flash ESP32-C6 WiFi coprocessor firmware (see `esp32c6_firmware/FLASHING_GUIDE.md`)
+2. **Connect hardware**:
+   - Connect Ethernet cable (optional, WiFi available via ESP32-C6)
+   - Connect ESP32-C6 to ESP32-P4 via UART (see pinout documentation)
+3. **Access web interface** at `http://ledbrain.local` or device IP
+4. **Configure network**:
+   - Ethernet (recommended) - automatic priority if connected
+   - WiFi via ESP32-C6 - configure through web interface if no Ethernet
+5. **Add LED segments** (physical strips) or **WLED devices** (remote)
+6. **Assign effects** to segments/devices
+7. **Enable audio** (if using Snapcast) for reactive effects
 
 ## 📦 Releases
 
