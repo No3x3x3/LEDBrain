@@ -1,0 +1,51 @@
+[
+  {
+    "category": "Classic",
+    "effects": [
+      { "name": "Solid", "desc": "Solid color" },
+      { "name": "Blink", "desc": "Blinking effect" },
+      { "name": "Breathe", "desc": "Breathing pulse" },
+      { "name": "Chase", "desc": "Chasing lights" },
+      { "name": "Colorloop", "desc": "Color loop" },
+      { "name": "Rainbow", "desc": "Rainbow loop" },
+      { "name": "Rainbow Runner", "desc": "Fast rainbow runner" },
+      { "name": "Rainbow Bands", "desc": "Striped rainbow bands" },
+      { "name": "Rain", "desc": "Falling rain drops" },
+      { "name": "Meteor", "desc": "Meteor shower" },
+      { "name": "Meteor Smooth", "desc": "Smooth meteor shower" },
+      { "name": "Candle", "desc": "Candle flicker" },
+      { "name": "Candle Multi", "desc": "Multiple candle flickers" },
+      { "name": "Scanner", "desc": "Larson scanner" },
+      { "name": "Scanner Dual", "desc": "Dual-direction scanner" },
+      { "name": "Theater", "desc": "Theater chase" },
+      { "name": "Noise", "desc": "Perlin noise" },
+      { "name": "Sinelon", "desc": "Sinelon effect" },
+      { "name": "Fireworks", "desc": "Bursts and sparks" },
+      { "name": "Fire 2012", "desc": "Classic fire" },
+      { "name": "Heartbeat", "desc": "Heartbeat pulse" },
+      { "name": "Ripple", "desc": "Single ripple" },
+      { "name": "Pacifica", "desc": "Pacifica ocean waves" }
+    ]
+  },
+  {
+    "category": "Energy",
+    "effects": [
+      { "name": "Power+", "desc": "Punchy energy beams" },
+      { "name": "Power Cycle", "desc": "Cycled energy pulses" },
+      { "name": "Energy Flow", "desc": "Directional energy trails" },
+      { "name": "Energy Burst", "desc": "Short bursts, beat friendly" },
+      { "name": "Energy Waves", "desc": "Layered waves, fast" },
+      { "name": "Rain (Dual)", "desc": "Dual-layer rain flow" }
+    ]
+  },
+  {
+    "category": "Rhythm",
+    "effects": [
+      { "name": "Beat Pulse", "desc": "Pulse on beat" },
+      { "name": "Beat Bars", "desc": "Bars scaled by beat" },
+      { "name": "Beat Scatter", "desc": "Beat-driven scatter" },
+      { "name": "Beat Light", "desc": "Simple beat flashes" },
+      { "name": "Strobe", "desc": "Hard strobe" }
+    ]
+  }
+]

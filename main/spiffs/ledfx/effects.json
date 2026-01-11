@@ -1,0 +1,19 @@
+[
+  {
+    "category": "Ambient",
+    "effects": [
+      { "name": "Rain", "desc": "Falling drops with cool tones" },
+      { "name": "Waves", "desc": "Smooth rolling gradients" },
+      { "name": "Plasma", "desc": "Animated gradients" },
+      { "name": "Aura", "desc": "Soft ambient glow" },
+      { "name": "Ripple Flow", "desc": "Ripples moving across LEDs" },
+      { "name": "Matrix", "desc": "Matrix-style falling glyphs" }
+    ]
+  },
+  {
+    "category": "Energy",
+    "effects": [
+      { "name": "Hyperspace", "desc": "Deep-space warp lines" }
+    ]
+  }
+]

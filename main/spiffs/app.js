@@ -1,4 +1,4 @@
-﻿// Simple test to verify JavaScript is executing
+// Simple test to verify JavaScript is executing
 console.log("=== LEDBrain app.js loaded ===");
 if (typeof document === "undefined") {
   console.error("FATAL: document is undefined!");
@@ -1173,7 +1173,7 @@ function renderWledDetail(dev) {
   const formContainer = qs("wledEffectForm");
   const fakeSegment = { name: dev.name || dev.id || "WLED", led_count: dev.leds || 0, audio: defaultSegmentAudio() };
   if (formContainer) {
-    renderEffectDetailForm(formContainer, fakeSegment, binding.effect);
+    renderEffectDetailForm(formContainer, fakeSegment, binding.effect, true);  // true = isWled
   }
 
   const fpsInput = qs("wledFxFps");
@@ -1205,8 +1205,10 @@ function renderWledDetail(dev) {
   });
 }
 
-function renderEffectDetailForm(target, segment, assignment) {
+function renderEffectDetailForm(target, segment, assignment, isWled = false) {
   if (!target) return;
+  const saveFn = isWled ? saveWledEffects : autoSaveLedConfig;
+  // Replace all autoSaveLedConfig() calls with saveFn() in this function scope
   const name = segment?.name || assignment?.segment_id || t("not_set");
   const audio = segment?.audio || defaultSegmentAudio();
   // Remember accordion state before re-render
@@ -1241,7 +1243,9 @@ function renderEffectDetailForm(target, segment, assignment) {
           </select>
         </label>
         <label style="grid-column: span 2;">${t("fx_effect_picker") || "Effect"}
-          <input list="effectCatalog" id="devFxEffect" value="${assignment.effect || 'Energy Flow'}">
+          <select id="devFxEffect">
+            <option value="">Loading...</option>
+          </select>
           <small class="muted" id="fxEffectDescription" style="display: block; margin-top: 0.25rem;"></small>
         </label>
         <label>${t("colFxPreset") || "Preset"}
@@ -1546,8 +1550,29 @@ function renderEffectDetailForm(target, segment, assignment) {
   // Update effect catalog for the current engine BEFORE setting up event listeners
   renderEffectCatalog(assignment.engine || "wled");
   
+  // Load effects asynchronously and populate the select
+  renderEffectOptions(assignment.engine || "wled", assignment.effect || "").then(options => {
+    const select = qs("devFxEffect");
+    if (select) {
+      select.innerHTML = options;
+    }
+    // Update description
+    const meta = findEffectMeta(assignment.effect);
+    const desc = qs("fxEffectDescription");
+    if (desc && meta) {
+      desc.textContent = meta.desc || "";
+    }
+  }).catch(err => {
+    console.error("Error loading effects:", err);
+    const select = qs("devFxEffect");
+    if (select) {
+      select.innerHTML = `<option value="${assignment.effect || ""}">${assignment.effect || "Error loading effects"}</option>`;
+    }
+  });
+  
   // Restore accordion state after render - use requestAnimationFrame to ensure DOM is ready
   requestAnimationFrame(() => {
+    // Restore accordion state after render
     const advancedDetailsAfter = target.querySelector('.fx-section-advanced');
     if (advancedDetailsAfter && state.fxFormAccordionState.advanced) {
       advancedDetailsAfter.setAttribute('open', '');
@@ -1561,7 +1586,7 @@ function renderEffectDetailForm(target, segment, assignment) {
     }
   });
 
-  qs("devFxEngine")?.addEventListener("change", (ev) => {
+  qs("devFxEngine")?.addEventListener("change", async (ev) => {
     assignment.engine = ev.target.value || assignment.engine;
     // Disable audio reactivity for WLED effects
     if (assignment.engine === "wled") {
@@ -1569,17 +1594,30 @@ function renderEffectDetailForm(target, segment, assignment) {
     }
     // Update effect catalog for the selected engine
     renderEffectCatalog(assignment.engine);
-    // Re-render form to update disabled states
-    renderEffectDetailForm(qs("fxDetailForm"), null, assignment);
-    autoSaveLedConfig();
+    // Update effect select dropdown
+    const effectSelect = qs("devFxEffect");
+    if (effectSelect) {
+      effectSelect.innerHTML = await renderEffectOptions(assignment.engine, assignment.effect || "");
+    }
+    // Re-render form to update disabled states (only if not WLED - WLED uses different container)
+    if (!isWled) {
+      renderEffectDetailForm(qs("fxDetailForm"), null, assignment, false);
+    }
+    saveFn();
   });
   qs("devFxEffect")?.addEventListener("change", (ev) => {
     assignment.effect = ev.target.value || "";
-    autoSaveLedConfig();
+    // Update description
+    const meta = findEffectMeta(assignment.effect);
+    const desc = qs("fxEffectDescription");
+    if (desc && meta) {
+      desc.textContent = meta.desc || "";
+    }
+    saveFn();
   });
   qs("devFxPreset")?.addEventListener("change", (ev) => {
     assignment.preset = ev.target.value || "";
-    autoSaveLedConfig();
+    saveFn();
   });
   // Color pickers with text inputs
   const color1Picker = qs("devFxColor1");
@@ -1588,14 +1626,14 @@ function renderEffectDetailForm(target, segment, assignment) {
     color1Picker.addEventListener("change", (ev) => {
       assignment.color1 = ev.target.value || assignment.color1;
       color1Text.value = assignment.color1;
-      autoSaveLedConfig();
+      saveFn();
     });
     color1Text.addEventListener("change", (ev) => {
       const val = ev.target.value.trim();
       if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
         assignment.color1 = val;
         color1Picker.value = val;
-        autoSaveLedConfig();
+        saveFn();
       }
     });
   }
@@ -1606,14 +1644,14 @@ function renderEffectDetailForm(target, segment, assignment) {
     color2Picker.addEventListener("change", (ev) => {
       assignment.color2 = ev.target.value || assignment.color2;
       color2Text.value = assignment.color2;
-      autoSaveLedConfig();
+      saveFn();
     });
     color2Text.addEventListener("change", (ev) => {
       const val = ev.target.value.trim();
       if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
         assignment.color2 = val;
         color2Picker.value = val;
-        autoSaveLedConfig();
+        saveFn();
       }
     });
   }
@@ -1624,14 +1662,14 @@ function renderEffectDetailForm(target, segment, assignment) {
     color3Picker.addEventListener("change", (ev) => {
       assignment.color3 = ev.target.value || assignment.color3;
       color3Text.value = assignment.color3;
-      autoSaveLedConfig();
+      saveFn();
     });
     color3Text.addEventListener("change", (ev) => {
       const val = ev.target.value.trim();
       if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
         assignment.color3 = val;
         color3Picker.value = val;
-        autoSaveLedConfig();
+        saveFn();
       }
     });
   }
@@ -1650,7 +1688,7 @@ function renderEffectDetailForm(target, segment, assignment) {
       if (!current) {
         gradientInput.value = examples[0];
         assignment.gradient = examples[0];
-        autoSaveLedConfig();
+        saveFn();
       } else {
         alert(`Gradient format:\n${examples.join("\n")}\n\nSeparate colors with: comma, dash, semicolon, or space`);
       }
@@ -1669,7 +1707,7 @@ function renderEffectDetailForm(target, segment, assignment) {
       const val = parseInt(ev.target.value, 10);
       assignment.brightness = Math.max(0, Math.min(val, 255));
       brightnessValue.textContent = assignment.brightness;
-      autoSaveLedConfig();
+      saveFn();
     });
   }
   
@@ -1686,7 +1724,7 @@ function renderEffectDetailForm(target, segment, assignment) {
       const val = parseInt(ev.target.value, 10);
       assignment.intensity = Math.max(0, Math.min(val, 255));
       intensityValue.textContent = assignment.intensity;
-      autoSaveLedConfig();
+      saveFn();
     });
   }
   
@@ -1703,31 +1741,31 @@ function renderEffectDetailForm(target, segment, assignment) {
       const val = parseInt(ev.target.value, 10);
       assignment.speed = Math.max(0, Math.min(val, 255));
       speedValue.textContent = assignment.speed;
-      autoSaveLedConfig();
+      saveFn();
     });
   }
   qs("devFxAudioProfile")?.addEventListener("change", (ev) => {
     assignment.audio_profile = ev.target.value || "default";
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxAudioMode")?.addEventListener("change", (ev) => {
     assignment.audio_mode = ev.target.value || "spectrum";
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxAudioLink")?.addEventListener("change", (ev) => {
-    const assign = getSelectedFxAssignment();
-    if (!assign) return;
     // Only allow audio reactivity for LEDFx effects
-    if (assign.engine === "wled") {
+    if (assignment.engine === "wled") {
       ev.target.checked = false;
-      assign.audio_link = false;
+      assignment.audio_link = false;
       notify("Audio reactivity is only available for LEDFx effects", "warn");
       return;
     }
-    assign.audio_link = ev.target.checked;
-    // Re-render form to show/hide audio reactive section
-    renderEffectDetailForm(qs("fxDetailForm"), segment, assign);
-    autoSaveLedConfig();
+    assignment.audio_link = ev.target.checked;
+    // Re-render form to show/hide audio reactive section (only if not WLED)
+    if (!isWled) {
+      renderEffectDetailForm(qs("fxDetailForm"), segment, assignment, false);
+    }
+    saveFn();
   });
   // Handle band selection changes
   const bandsContainer = qs("devFxBandsContainer");
@@ -1744,11 +1782,11 @@ function renderEffectDetailForm(target, segment, assignment) {
         }
         // Remove empty entries
         assignment.selected_bands = assignment.selected_bands.filter(b => b);
-        // Re-render if needed
-        if (assignment.selected_bands.length === 0) {
-          renderEffectDetailForm(qs("effectDetailForm"), segment, assignment);
+        // Re-render if needed (only if not WLED)
+        if (!isWled && assignment.selected_bands.length === 0) {
+          renderEffectDetailForm(qs("effectDetailForm"), segment, assignment, false);
         }
-        autoSaveLedConfig();
+        saveFn();
       }
     });
     
@@ -1756,23 +1794,27 @@ function renderEffectDetailForm(target, segment, assignment) {
       if (ev.target.classList.contains("band-add")) {
         if (!assignment.selected_bands) assignment.selected_bands = [];
         assignment.selected_bands.push("");
-        renderEffectDetailForm(qs("effectDetailForm"), segment, assignment);
+        if (!isWled) {
+          renderEffectDetailForm(qs("effectDetailForm"), segment, assignment, false);
+        }
       } else if (ev.target.classList.contains("band-remove")) {
         const idx = parseInt(ev.target.dataset.idx, 10);
         if (!assignment.selected_bands) assignment.selected_bands = [];
         assignment.selected_bands.splice(idx, 1);
-        renderEffectDetailForm(qs("effectDetailForm"), segment, assignment);
+        if (!isWled) {
+          renderEffectDetailForm(qs("effectDetailForm"), segment, assignment, false);
+        }
       }
     });
   }
   
   qs("devFxReactiveMode")?.addEventListener("change", (ev) => {
     assignment.reactive_mode = ev.target.value || "full";
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxDirection")?.addEventListener("change", (ev) => {
     assignment.direction = ev.target.value || "forward";
-    autoSaveLedConfig();
+    saveFn();
   });
   // Scatter slider with value display
   const scatterSlider = qs("devFxScatter");
@@ -1789,112 +1831,112 @@ function renderEffectDetailForm(target, segment, assignment) {
   });
   qs("devFxFadeIn")?.addEventListener("change", (ev) => {
     assignment.fade_in = Math.max(0, parseInt(ev.target.value, 10) || 0);
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxFadeOut")?.addEventListener("input", (ev) => {
     assignment.fade_out = Math.max(0, parseInt(ev.target.value, 10) || 0);
   });
   qs("devFxFadeOut")?.addEventListener("change", (ev) => {
     assignment.fade_out = Math.max(0, parseInt(ev.target.value, 10) || 0);
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxPalette")?.addEventListener("change", (ev) => {
     assignment.palette = ev.target.value || "";
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxGradient")?.addEventListener("change", (ev) => {
     assignment.gradient = ev.target.value || "";
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxBrightnessOverride")?.addEventListener("change", (ev) => {
     let val = parseInt(ev.target.value, 10);
     if (!Number.isFinite(val)) val = 0;
     assignment.brightness_override = Math.max(0, Math.min(val, 255));
     ev.target.value = assignment.brightness_override;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxGammaColor")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
     assignment.gamma_color = Number.isFinite(val) ? val : assignment.gamma_color;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxGammaBrightness")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
     assignment.gamma_brightness = Number.isFinite(val) ? val : assignment.gamma_brightness;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxBlendMode")?.addEventListener("change", (ev) => {
     assignment.blend_mode = ev.target.value || "normal";
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxLayers")?.addEventListener("change", (ev) => {
     let val = parseInt(ev.target.value, 10);
     if (!Number.isFinite(val)) val = 1;
     assignment.layers = Math.max(1, Math.min(val, 8));
     ev.target.value = assignment.layers;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxSensBass")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
     assignment.band_gain_low = Number.isFinite(val) ? val : assignment.band_gain_low;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxSensMids")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
     assignment.band_gain_mid = Number.isFinite(val) ? val : assignment.band_gain_mid;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxSensTreble")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
     assignment.band_gain_high = Number.isFinite(val) ? val : assignment.band_gain_high;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxAmplitude")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
     assignment.amplitude_scale = Number.isFinite(val) ? val : assignment.amplitude_scale;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxBrightnessCompress")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
     assignment.brightness_compress = Number.isFinite(val) ? val : assignment.brightness_compress;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxBeatResponse")?.addEventListener("change", (ev) => {
     assignment.beat_response = ev.target.checked;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxAttack")?.addEventListener("change", (ev) => {
     let val = parseInt(ev.target.value, 10);
     if (!Number.isFinite(val)) val = 0;
     assignment.attack_ms = Math.max(0, val);
     ev.target.value = assignment.attack_ms;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxRelease")?.addEventListener("change", (ev) => {
     let val = parseInt(ev.target.value, 10);
     if (!Number.isFinite(val)) val = 0;
     assignment.release_ms = Math.max(0, val);
     ev.target.value = assignment.release_ms;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxScenePreset")?.addEventListener("change", (ev) => {
     assignment.scene_preset = ev.target.value || "";
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxSceneSchedule")?.addEventListener("change", (ev) => {
     assignment.scene_schedule = ev.target.value || "";
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devFxBeatShuffle")?.addEventListener("change", (ev) => {
     assignment.beat_shuffle = ev.target.checked;
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devAudioStereoSplit")?.addEventListener("change", (ev) => {
     if (segment) {
       segment.audio = segment.audio || defaultSegmentAudio();
       segment.audio.stereo_split = ev.target.checked;
     }
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devAudioGainL")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
@@ -1902,7 +1944,7 @@ function renderEffectDetailForm(target, segment, assignment) {
       segment.audio = segment.audio || defaultSegmentAudio();
       segment.audio.gain_left = Number.isFinite(val) ? val : segment.audio.gain_left;
     }
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devAudioGainR")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
@@ -1910,7 +1952,7 @@ function renderEffectDetailForm(target, segment, assignment) {
       segment.audio = segment.audio || defaultSegmentAudio();
       segment.audio.gain_right = Number.isFinite(val) ? val : segment.audio.gain_right;
     }
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devAudioSensitivity")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
@@ -1918,7 +1960,7 @@ function renderEffectDetailForm(target, segment, assignment) {
       segment.audio = segment.audio || defaultSegmentAudio();
       segment.audio.sensitivity = Number.isFinite(val) ? val : segment.audio.sensitivity;
     }
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devAudioThreshold")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
@@ -1926,7 +1968,7 @@ function renderEffectDetailForm(target, segment, assignment) {
       segment.audio = segment.audio || defaultSegmentAudio();
       segment.audio.threshold = Number.isFinite(val) ? val : segment.audio.threshold;
     }
-    autoSaveLedConfig();
+    saveFn();
   });
   qs("devAudioSmoothing")?.addEventListener("change", (ev) => {
     const val = parseFloat(ev.target.value);
@@ -1934,7 +1976,7 @@ function renderEffectDetailForm(target, segment, assignment) {
       segment.audio = segment.audio || defaultSegmentAudio();
       segment.audio.smoothing = Number.isFinite(val) ? val : segment.audio.smoothing;
     }
-    autoSaveLedConfig();
+    saveFn();
   });
 }
 
@@ -2564,10 +2606,28 @@ function ensureEffectAssignment(segmentId) {
 }
 
 function findEffectMeta(name) {
-  const lookup = (name || "").toLowerCase();
+  if (!name) return null;
+  const lookup = name.toLowerCase();
+  
+  // Check loaded effects cache
+  for (const engine of ["wled", "ledfx"]) {
+    if (effectsCache[engine]) {
+      for (const group of effectsCache[engine]) {
+        if (group.effects && Array.isArray(group.effects)) {
+          for (const eff of group.effects) {
+            if (eff.name && eff.name.toLowerCase() === lookup) {
+              return eff;
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // Fallback to EFFECT_LIBRARY
   for (const group of EFFECT_LIBRARY) {
     for (const eff of group.effects) {
-      if (eff.name.toLowerCase() === lookup) {
+      if (eff.name && eff.name.toLowerCase() === lookup) {
         return eff;
       }
     }
@@ -2575,17 +2635,99 @@ function findEffectMeta(name) {
   return null;
 }
 
+// Cache for loaded effects
+let effectsCache = {
+  wled: null,
+  ledfx: null
+};
+
+async function loadEffectsForEngine(engine) {
+  // Return cached if available
+  if (effectsCache[engine]) {
+    return effectsCache[engine];
+  }
+  
+  try {
+    const filename = engine === "wled" ? "wled/effects.json" : "ledfx/effects.json";
+    const response = await fetch(`/${filename}`);
+    if (!response.ok) {
+      console.warn(`Failed to load ${filename}, using fallback`);
+      return null;
+    }
+    const data = await response.json();
+    effectsCache[engine] = data;
+    return data;
+  } catch (err) {
+    console.error(`Error loading effects for ${engine}:`, err);
+    return null;
+  }
+}
+
+async function renderEffectOptions(engine, current) {
+  let effects = [];
+  
+  // Load effects from JSON file
+  const effectsData = await loadEffectsForEngine(engine);
+  
+  if (effectsData && Array.isArray(effectsData)) {
+    // Use effects from JSON file
+    for (const group of effectsData) {
+      if (group.effects && Array.isArray(group.effects)) {
+        for (const eff of group.effects) {
+          if (!effects.find(e => e.name === eff.name)) {
+            effects.push({ name: eff.name, category: group.category });
+          }
+        }
+      }
+    }
+  } else {
+    // Fallback to EFFECT_LIBRARY if JSON files are not available
+    if (engine === "wled") {
+      for (const group of EFFECT_LIBRARY) {
+        for (const eff of group.effects) {
+          if (eff.engine === "wled" && !effects.find(e => e.name === eff.name)) {
+            effects.push({ name: eff.name, category: group.category });
+          }
+        }
+      }
+    } else {
+      for (const group of EFFECT_LIBRARY) {
+        for (const eff of group.effects) {
+          if (eff.engine === "ledfx" && !effects.find(e => e.name === eff.name)) {
+            effects.push({ name: eff.name, category: group.category });
+          }
+        }
+      }
+    }
+  }
+  
+  // Group by category
+  const byCategory = {};
+  for (const eff of effects) {
+    if (!byCategory[eff.category]) {
+      byCategory[eff.category] = [];
+    }
+    byCategory[eff.category].push(eff.name);
+  }
+  
+  // Build options HTML
+  let options = "";
+  for (const [category, names] of Object.entries(byCategory)) {
+    names.sort();
+    options += `<optgroup label="${category}">`;
+    for (const name of names) {
+      options += `<option value="${name}" ${name === current ? "selected" : ""}>${name}</option>`;
+    }
+    options += `</optgroup>`;
+  }
+  return options;
+}
+
 function renderEffectPicker(current) {
   const select = qs("fxEffectPicker");
   if (!select) return;
-  const options = EFFECT_LIBRARY.map((group) => {
-    const items = group.effects
-      .map(
-        (eff) => `<option value="${eff.name}" ${eff.name === current ? "selected" : ""}>${eff.name}</option>`
-      )
-      .join("");
-    return `<optgroup label="${group.category}">${items}</optgroup>`;
-  }).join("");
+  const assignment = ensureEffectAssignment(state.selectedFxSegment);
+  const options = renderEffectOptions(assignment.engine || "wled", current);
   select.innerHTML = `<option value="">${t("pin_select")}</option>${options}`;
 }
 
