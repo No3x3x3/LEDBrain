@@ -9,6 +9,9 @@ idf_component_register(
         esp_event
         nvs_flash
         esp_driver_uart
+        esp_http_server
+        json
+        json
     PRIV_REQUIRES
         lwip
         esp_driver_gpio

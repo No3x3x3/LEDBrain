@@ -23,7 +23,9 @@
 #include "lwip/ip_addr.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
+#include "esp_http_server.h"
 #include <stdlib.h>
+#include <cJSON.h>
 
 static const char *TAG = "ledbrain_c6";
 static const char *NVS_NAMESPACE = "wifi_cfg";
@@ -42,6 +44,7 @@ static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_num = 0;
 static esp_netif_t *s_ap_netif = NULL;
 static esp_netif_t *s_sta_netif = NULL;
+static httpd_handle_t s_httpd = NULL;
 
 // Control UART configuration (UART1 for control commands)
 // Note: UART0 is used for PPP (GPIO18/17), so UART1 uses different pins
@@ -160,6 +163,271 @@ static esp_err_t wifi_save_to_nvs(const wifi_config_t *sta_config)
     return err;
 }
 
+/* Forward declarations */
+static esp_err_t wifi_start_sta_mode(wifi_config_t *sta_config, bool keep_ap);
+static void stop_web_server(void);
+static httpd_handle_t start_web_server(void);
+
+/* HTTP Server handlers */
+static const char* html_page = 
+"<!DOCTYPE html>"
+"<html>"
+"<head>"
+"<meta charset='UTF-8'>"
+"<meta name='viewport' content='width=device-width, initial-scale=1'>"
+"<title>LEDBrain WiFi Setup</title>"
+"<style>"
+"body{font-family:Arial,sans-serif;max-width:600px;margin:50px auto;padding:20px;background:#f5f5f5;}"
+"h1{color:#333;text-align:center;}"
+".container{background:white;padding:30px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);}"
+"button{width:100%;padding:12px;margin:10px 0;background:#007bff;color:white;border:none;border-radius:5px;font-size:16px;cursor:pointer;}"
+"button:hover{background:#0056b3;}"
+"button:disabled{background:#ccc;cursor:not-allowed;}"
+"input[type='text'],input[type='password']{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:5px;box-sizing:border-box;}"
+"select{width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:5px;box-sizing:border-box;}"
+".network-item{padding:10px;margin:5px 0;border:1px solid #ddd;border-radius:5px;cursor:pointer;background:#f9f9f9;}"
+".network-item:hover{background:#e9e9e9;}"
+".network-item.selected{background:#007bff;color:white;}"
+"#status{margin:20px 0;padding:10px;border-radius:5px;}"
+".status-ok{background:#d4edda;color:#155724;border:1px solid #c3e6cb;}"
+".status-error{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;}"
+".status-info{background:#d1ecf1;color:#0c5460;border:1px solid #bee5eb;}"
+"</style>"
+"</head>"
+"<body>"
+"<div class='container'>"
+"<h1>LEDBrain WiFi Setup</h1>"
+"<div id='status' class='status-info' style='display:none;'></div>"
+"<button onclick='scanWiFi()'>Skanuj sieci WiFi</button>"
+"<div id='networks'></div>"
+"<div id='form' style='display:none;'>"
+"<h3>Hasło WiFi:</h3>"
+"<input type='password' id='password' placeholder='Wpisz hasło'>"
+"<button onclick='connectWiFi()'>Połącz</button>"
+"</div>"
+"</div>"
+"<script>"
+"let selectedSSID='';"
+"function showStatus(msg,type){"
+"const el=document.getElementById('status');"
+"el.textContent=msg;"
+"el.className='status-'+type;"
+"el.style.display='block';"
+"}"
+"function scanWiFi(){"
+"showStatus('Skanowanie...','info');"
+"fetch('/api/wifi/scan')"
+".then(r=>r.json())"
+".then(data=>{"
+"if(data.error){showStatus('Błąd: '+data.error,'error');return;}"
+"const div=document.getElementById('networks');"
+"div.innerHTML='';"
+"if(data.networks.length===0){showStatus('Nie znaleziono sieci','info');return;}"
+"data.networks.forEach(net=>{"
+"const item=document.createElement('div');"
+"item.className='network-item';"
+"item.innerHTML=net.ssid+' <span style=\"float:right;\">'+net.rssi+' dBm</span>';"
+"item.onclick=()=>{"
+"document.querySelectorAll('.network-item').forEach(i=>i.classList.remove('selected'));"
+"item.classList.add('selected');"
+"selectedSSID=net.ssid;"
+"document.getElementById('form').style.display='block';"
+"};"
+"div.appendChild(item);"
+"});"
+"showStatus('Znaleziono '+data.networks.length+' sieci','ok');"
+"})"
+".catch(e=>{showStatus('Błąd skanowania: '+e,'error');});"
+"}"
+"function connectWiFi(){"
+"const pwd=document.getElementById('password').value;"
+"if(!selectedSSID){showStatus('Wybierz sieć','error');return;}"
+"if(!pwd){showStatus('Wpisz hasło','error');return;}"
+"showStatus('Łączenie...','info');"
+"fetch('/api/wifi/connect',{"
+"method:'POST',"
+"headers:{'Content-Type':'application/json'},"
+"body:JSON.stringify({ssid:selectedSSID,password:pwd})"
+"})"
+".then(r=>r.json())"
+".then(data=>{"
+"if(data.success){"
+"showStatus('Połączono! Przekierowywanie...','ok');"
+"setTimeout(()=>window.location.reload(),2000);"
+"}else{"
+"showStatus('Błąd: '+(data.error||'Nieznany błąd'),'error');"
+"}"
+"})"
+".catch(e=>{showStatus('Błąd: '+e,'error');});"
+"}"
+"</script>"
+"</body>"
+"</html>";
+
+static esp_err_t root_get_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t api_wifi_scan_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = false,
+    };
+    
+    esp_wifi_scan_start(&scan_config, true);
+    
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    
+    cJSON *root = cJSON_CreateObject();
+    cJSON *networks = cJSON_CreateArray();
+    
+    if (ap_count > 0) {
+        wifi_ap_record_t *ap_records = malloc(sizeof(wifi_ap_record_t) * ap_count);
+        if (ap_records) {
+            esp_wifi_scan_get_ap_records(&ap_count, ap_records);
+            
+            for (uint16_t i = 0; i < ap_count; i++) {
+                cJSON *net = cJSON_CreateObject();
+                cJSON_AddStringToObject(net, "ssid", (char*)ap_records[i].ssid);
+                cJSON_AddNumberToObject(net, "rssi", ap_records[i].rssi);
+                cJSON_AddNumberToObject(net, "authmode", ap_records[i].authmode);
+                cJSON_AddNumberToObject(net, "channel", ap_records[i].primary);
+                cJSON_AddItemToArray(networks, net);
+            }
+            
+            free(ap_records);
+        }
+    }
+    
+    cJSON_AddItemToObject(root, "networks", networks);
+    
+    char *json_str = cJSON_Print(root);
+    httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+    free(json_str);
+    cJSON_Delete(root);
+    
+    return ESP_OK;
+}
+
+static esp_err_t api_wifi_connect_handler(httpd_req_t *req) {
+    char content[512];
+    size_t recv_size = sizeof(content);
+    
+    int ret = httpd_req_recv(req, content, recv_size);
+    if (ret <= 0) {
+        httpd_resp_set_status(req, HTTPD_400);
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"No data\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    
+    content[ret] = '\0';
+    
+    cJSON *root = cJSON_Parse(content);
+    if (!root) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_status(req, HTTPD_400);
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Invalid JSON\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    
+    cJSON *ssid_json = cJSON_GetObjectItem(root, "ssid");
+    cJSON *password_json = cJSON_GetObjectItem(root, "password");
+    
+    if (!cJSON_IsString(ssid_json) || !cJSON_IsString(password_json)) {
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_status(req, HTTPD_400);
+        httpd_resp_send(req, "{\"success\":false,\"error\":\"Missing ssid or password\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    
+    const char *ssid = cJSON_GetStringValue(ssid_json);
+    const char *password = cJSON_GetStringValue(password_json);
+    
+    // Configure WiFi STA
+    wifi_config_t sta_config = {0};
+    strncpy((char*)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid) - 1);
+    strncpy((char*)sta_config.sta.password, password, sizeof(sta_config.sta.password) - 1);
+    sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    
+    // Save to NVS
+    wifi_save_to_nvs(&sta_config);
+    
+    // Stop web server before switching to STA mode
+    stop_web_server();
+    
+    // Start STA mode
+    esp_err_t wifi_ret = wifi_start_sta_mode(&sta_config, false);  // don't keep AP
+    
+    httpd_resp_set_type(req, "application/json");
+    
+    cJSON *response = cJSON_CreateObject();
+    if (wifi_ret == ESP_OK) {
+        cJSON_AddBoolToObject(response, "success", true);
+        ESP_LOGI(TAG, "WiFi configured: SSID=%s", ssid);
+    } else {
+        cJSON_AddBoolToObject(response, "success", false);
+        cJSON_AddStringToObject(response, "error", "Failed to configure WiFi");
+    }
+    
+    char *response_str = cJSON_Print(response);
+    httpd_resp_send(req, response_str, HTTPD_RESP_USE_STRLEN);
+    free(response_str);
+    cJSON_Delete(response);
+    cJSON_Delete(root);
+    
+    return ESP_OK;
+}
+
+static httpd_handle_t start_web_server(void) {
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.server_port = 80;
+    config.max_uri_handlers = 3;
+    
+    httpd_handle_t server = NULL;
+    if (httpd_start(&server, &config) == ESP_OK) {
+        httpd_uri_t root = {
+            .uri = "/",
+            .method = HTTP_GET,
+            .handler = root_get_handler,
+        };
+        httpd_register_uri_handler(server, &root);
+        
+        httpd_uri_t scan = {
+            .uri = "/api/wifi/scan",
+            .method = HTTP_GET,
+            .handler = api_wifi_scan_handler,
+        };
+        httpd_register_uri_handler(server, &scan);
+        
+        httpd_uri_t connect = {
+            .uri = "/api/wifi/connect",
+            .method = HTTP_POST,
+            .handler = api_wifi_connect_handler,
+        };
+        httpd_register_uri_handler(server, &connect);
+        
+        ESP_LOGI(TAG, "Web server started on http://192.168.4.1");
+    }
+    
+    return server;
+}
+
+static void stop_web_server(void) {
+    if (s_httpd) {
+        httpd_stop(s_httpd);
+        s_httpd = NULL;
+        ESP_LOGI(TAG, "Web server stopped");
+    }
+}
+
 /* Start WiFi AP mode */
 static esp_err_t wifi_start_ap_mode(void)
 {
@@ -188,6 +456,12 @@ static esp_err_t wifi_start_ap_mode(void)
 
     ESP_LOGI(TAG, "WiFi AP started: SSID=LEDBrain-Setup-C6, IP=192.168.4.1");
     ESP_LOGI(TAG, "Password: ledbrain123");
+    
+    // Start web server for WiFi configuration
+    if (!s_httpd) {
+        s_httpd = start_web_server();
+    }
+    
     return ESP_OK;
 }
 

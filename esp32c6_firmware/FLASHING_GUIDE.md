@@ -51,19 +51,113 @@ Jeśli płytka nie ma osobnego portu, może być możliwość programowania ESP3
 2. ESP32-P4 będzie działał jako most między USB a ESP32-C6
 3. Wymaga dodatkowej konfiguracji (sprawdź dokumentację płytki)
 
-### Opcja 4: Zewnętrzny programator UART
+### Opcja 4: Zewnętrzny programator UART ⭐
 
-Jeśli masz dostęp do pinów ESP32-C6 (boot, reset, TX, RX, GND, VCC):
+Jeśli masz zewnętrzny programator USB-to-UART (np. CP2102, CH340, FT232, FT2232):
 
-1. **Podłącz zewnętrzny programator USB-to-UART** (np. CP2102, CH340, FT232):
-   - **GND** → GND płytki
-   - **VCC** → 3.3V (nie 5V!)
-   - **TX** → RX ESP32-C6 (GPIO17)
-   - **RX** → TX ESP32-C6 (GPIO18)
-   - **DTR** → Boot pin ESP32-C6 (opcjonalnie, dla auto-reset)
-   - **RTS** → Reset pin ESP32-C6 (opcjonalnie)
+#### Krok 1: Identyfikacja pinów ESP32-C6
 
-2. **Użyj portu COM** programatora
+**WAŻNE**: Musisz sprawdzić schemat płytki `docs/hardware/schematics/` aby znaleźć piny ESP32-C6 na płytce JC-ESP32P4-M3-DEV.
+
+**Standardowe piny ESP32-C6 dla programowania UART:**
+- **UART0 TX**: GPIO16 (TX programatora → ten pin)
+- **UART0 RX**: GPIO17 (RX programatora → ten pin)
+- **BOOT**: GPIO9 (przycisk BOOT, podłącz do DTR programatora)
+- **RESET**: EN (pin Enable, podłącz do RTS programatora)
+- **GND**: Dowolny GND
+- **VCC**: 3.3V (NIE 5V!)
+
+**Uwaga**: Na płytce JC-ESP32P4-M3-DEV piny mogą być oznaczone inaczej. Sprawdź schemat w `docs/hardware/schematics/` lub dokumentację płytki.
+
+#### Krok 2: Podłączenie zewnętrznego programatora
+
+**Podłącz programator USB-to-UART do ESP32-C6:**
+
+```
+Programator USB-UART    →    ESP32-C6 na płytce
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GND                     →    GND
+VCC (3.3V!)            →    3.3V (NIE 5V - uszkodzi ESP32-C6!)
+TX                      →    GPIO16 (UART0 RX ESP32-C6)
+RX                      →    GPIO17 (UART0 TX ESP32-C6)
+DTR                     →    GPIO9 (BOOT pin) - opcjonalnie
+RTS                     →    EN (RESET pin) - opcjonalnie
+```
+
+**UWAGA**: 
+- ⚠️ **Użyj TYLKO 3.3V!** 5V uszkodzi ESP32-C6
+- Jeśli programator ma przełącznik VCC (3.3V/5V), upewnij się że jest ustawiony na 3.3V
+- DTR i RTS są opcjonalne - pozwalają na automatyczne wejście w tryb bootloader (bez ręcznego przytrzymywania przycisków)
+
+#### Krok 3: Instalacja sterowników
+
+**Zainstaluj sterowniki dla swojego programatora:**
+
+- **CP2102/CP2104**: [Silicon Labs VCP Drivers](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers)
+- **CH340/CH341**: [CH340 Drivers](http://www.wch-ic.com/downloads/CH341SER_EXE.html)
+- **FTDI (FT232, FT2232)**: [FTDI VCP Drivers](https://ftdichip.com/drivers/vcp-drivers/)
+
+Po instalacji sprawdź port COM w Device Manager (Windows).
+
+#### Krok 4: Ręczne wejście w tryb bootloader (jeśli brak DTR/RTS)
+
+Jeśli nie podłączyłeś DTR/RTS, musisz ręcznie wejść w tryb bootloader:
+
+1. **Podłącz programator do komputera** (sprawdź port COM)
+2. **Przytrzymaj przycisk BOOT** (GPIO9) na ESP32-C6
+3. **Naciśnij i zwolnij przycisk RESET** (EN)
+4. **Zwolnij przycisk BOOT**
+5. ESP32-C6 jest teraz w trybie bootloader
+
+#### Krok 5: Wgrywanie firmware
+
+Użyj standardowych komend ESP-IDF z portem COM programatora:
+
+**Windows:**
+```powershell
+cd esp32c6_firmware
+idf.py set-target esp32c6
+idf.py menuconfig  # Skonfiguruj WiFi (SSID i hasło)
+idf.py build
+idf.py -p COM5 flash monitor  # Zamień COM5 na właściwy port
+```
+
+**Linux/macOS:**
+```bash
+cd esp32c6_firmware
+idf.py set-target esp32c6
+idf.py menuconfig  # Skonfiguruj WiFi (SSID i hasło)
+idf.py build
+idf.py -p /dev/ttyUSB0 flash monitor  # Zamień /dev/ttyUSB0 na właściwy port
+```
+
+**Znajdź port COM programatora:**
+- **Windows**: Device Manager → Ports (COM & LPT) → "USB Serial Port (COMx)"
+- **Linux**: `ls /dev/ttyUSB*` lub `dmesg | grep tty`
+- **macOS**: `ls /dev/cu.*`
+
+#### Krok 6: Rozwiązywanie problemów
+
+**Problem: "Permission denied" (Linux/macOS)**
+```bash
+sudo chmod 666 /dev/ttyUSB0
+# Lub dodaj użytkownika do grupy dialout
+sudo usermod -a -G dialout $USER
+```
+
+**Problem: "Timed out waiting for packet header"**
+- Sprawdź czy wszystkie połączenia są prawidłowe
+- Upewnij się, że ESP32-C6 jest w trybie bootloader (przytrzymaj BOOT + naciśnij RESET)
+- Spróbuj niższego baudrate: `idf.py -p COM5 -b 115200 flash`
+
+**Problem: "Device not found"**
+- Sprawdź czy programator jest podłączony i sterowniki zainstalowane
+- Sprawdź Device Manager (Windows) czy widzi urządzenie
+- Spróbuj innego portu USB
+
+**Problem: ESP32-C6 się nie resetuje**
+- Upewnij się, że RTS jest podłączony do EN (RESET)
+- Lub użyj ręcznego resetu (przytrzymaj BOOT + naciśnij RESET)
 
 ## 📝 Krok po kroku: Wgrywanie firmware na ESP32-C6
 
