@@ -1,4 +1,4 @@
-// Simple test to verify JavaScript is executing
+﻿// Simple test to verify JavaScript is executing
 console.log("=== LEDBrain app.js loaded ===");
 if (typeof document === "undefined") {
   console.error("FATAL: document is undefined!");
