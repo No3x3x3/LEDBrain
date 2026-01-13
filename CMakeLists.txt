@@ -5,5 +5,6 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(ledbrain)
 
 # Note: We only use OTA partitions (ota_0, ota_1), no factory partition exists.
+# With CONFIG_PARTITION_TABLE_CUSTOM=y, idf.py flash will automatically
+# detect ota_0 as the first app partition and flash to offset 0x20000.
 # To flash firmware, use: idf.py flash -p COMx
-# Or use esptool directly to flash to OTA partition at offset 0x20000
