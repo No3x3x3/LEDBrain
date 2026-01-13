@@ -1,4 +1,4 @@
-﻿// Simple test to verify JavaScript is executing
+// Simple test to verify JavaScript is executing
 console.log("=== LEDBrain app.js loaded ===");
 if (typeof document === "undefined") {
   console.error("FATAL: document is undefined!");
@@ -4965,7 +4965,7 @@ async function checkOta() {
     }
     const data = await res.json();
     const asset = Array.isArray(data.assets)
-      ? data.assets.find((a) => (a.name || "").toLowerCase().endswith(".bin"))
+      ? data.assets.find((a) => (a.name || "").toLowerCase().endsWith(".bin"))
       : null;
     const tag = data.tag_name || data.name || "";
     const url = asset?.browser_download_url || null;
@@ -4973,8 +4973,10 @@ async function checkOta() {
     setText("valAvailableVersion", tag || t("ota_no_version"));
     const current = (state.info?.fw_version || "").replace(/^v/i, "").trim();
     const latest = (tag || "").replace(/^v/i, "").trim();
+    // Compare versions: if latest exists and is different from current, it's newer
     const isNewer = latest && (!current || latest !== current);
     const canApply = Boolean(url && isNewer);
+    console.log("OTA check:", { current, latest, isNewer, hasUrl: !!url, assetName: asset?.name });
     if (applyBtn) applyBtn.disabled = !canApply;
     setOtaStatus(
       isNewer && tag
