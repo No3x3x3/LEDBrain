@@ -202,40 +202,99 @@ void disable_wled_ddp_mode(const std::string& ip) {
   
   // Fallback: simple disable if we don't have saved state or restore failed
   if (!restored) {
-    char url[96];
-    snprintf(url, sizeof(url), "http://%s/json/state", ip.c_str());
-    
-    esp_http_client_config_t cfg = {};
-    cfg.url = url;
-    cfg.timeout_ms = 2000;
-    cfg.skip_cert_common_name_check = true;
-    cfg.method = HTTP_METHOD_POST;
-    
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) {
-      ESP_LOGW(TAG, "Failed to init HTTP client for DDP disable: %s", ip.c_str());
-      return;
-    }
-    
-    // JSON payload: disable live mode (DDP receive) and turn on WLED (restore normal mode)
-    // This allows WLED to work independently again
-    const char* json_payload = "{\"live\":false,\"on\":true}";
-    esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    
-    esp_err_t err = esp_http_client_perform(client);
-    if (err == ESP_OK) {
-      const int status_code = esp_http_client_get_status_code(client);
-      if (status_code == 200) {
-        ESP_LOGI(TAG, "Disabled DDP receive mode for WLED device: %s (restored normal mode)", ip.c_str());
-      } else {
-        ESP_LOGW(TAG, "Failed to disable DDP mode for %s: HTTP %d", ip.c_str(), status_code);
+    // Try to get current state from WLED and restore it (without live mode)
+    std::string current_state = get_wled_state(ip);
+    if (!current_state.empty()) {
+      // Parse current state and ensure live=false, on=true
+      cJSON* state = cJSON_Parse(current_state.c_str());
+      if (state) {
+        cJSON* live = cJSON_GetObjectItem(state, "live");
+        if (live) {
+          cJSON_SetBoolValue(live, false);
+        } else {
+          cJSON_AddBoolToObject(state, "live", false);
+        }
+        // Ensure WLED is on (but keep other settings like effect, colors, brightness)
+        cJSON* on = cJSON_GetObjectItem(state, "on");
+        if (on) {
+          cJSON_SetBoolValue(on, true);
+        } else {
+          cJSON_AddBoolToObject(state, "on", true);
+        }
+        
+        char* restored_json = cJSON_PrintUnformatted(state);
+        if (restored_json) {
+          char url[96];
+          snprintf(url, sizeof(url), "http://%s/json/state", ip.c_str());
+          
+          esp_http_client_config_t cfg = {};
+          cfg.url = url;
+          cfg.timeout_ms = 2000;
+          cfg.skip_cert_common_name_check = true;
+          cfg.method = HTTP_METHOD_POST;
+          
+          esp_http_client_handle_t client = esp_http_client_init(&cfg);
+          if (client) {
+            esp_http_client_set_post_field(client, restored_json, strlen(restored_json));
+            esp_http_client_set_header(client, "Content-Type", "application/json");
+            
+            esp_err_t err = esp_http_client_perform(client);
+            if (err == ESP_OK) {
+              const int status_code = esp_http_client_get_status_code(client);
+              if (status_code == 200) {
+                ESP_LOGI(TAG, "Restored current WLED state for %s (disabled DDP mode)", ip.c_str());
+                restored = true;
+              } else {
+                ESP_LOGW(TAG, "Failed to restore WLED state for %s: HTTP %d", ip.c_str(), status_code);
+              }
+            } else {
+              ESP_LOGW(TAG, "Failed to restore WLED state for %s: %s", ip.c_str(), esp_err_to_name(err));
+            }
+            esp_http_client_cleanup(client);
+          }
+          free(restored_json);
+        }
+        cJSON_Delete(state);
       }
-    } else {
-      ESP_LOGW(TAG, "Failed to disable DDP mode for %s: %s", ip.c_str(), esp_err_to_name(err));
     }
     
-    esp_http_client_cleanup(client);
+    // Final fallback: minimal restore (only disable live mode, keep everything else)
+    if (!restored) {
+      char url[96];
+      snprintf(url, sizeof(url), "http://%s/json/state", ip.c_str());
+      
+      esp_http_client_config_t cfg = {};
+      cfg.url = url;
+      cfg.timeout_ms = 2000;
+      cfg.skip_cert_common_name_check = true;
+      cfg.method = HTTP_METHOD_POST;
+      
+      esp_http_client_handle_t client = esp_http_client_init(&cfg);
+      if (!client) {
+        ESP_LOGW(TAG, "Failed to init HTTP client for DDP disable: %s", ip.c_str());
+        return;
+      }
+      
+      // JSON payload: only disable live mode, don't change anything else
+      // This allows WLED to continue with its current effect/colors
+      const char* json_payload = "{\"live\":false}";
+      esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
+      esp_http_client_set_header(client, "Content-Type", "application/json");
+      
+      esp_err_t err = esp_http_client_perform(client);
+      if (err == ESP_OK) {
+        const int status_code = esp_http_client_get_status_code(client);
+        if (status_code == 200) {
+          ESP_LOGI(TAG, "Disabled DDP receive mode for WLED device: %s (kept current state)", ip.c_str());
+        } else {
+          ESP_LOGW(TAG, "Failed to disable DDP mode for %s: HTTP %d", ip.c_str(), status_code);
+        }
+      } else {
+        ESP_LOGW(TAG, "Failed to disable DDP mode for %s: %s", ip.c_str(), esp_err_to_name(err));
+      }
+      
+      esp_http_client_cleanup(client);
+    }
   }
   
   // Remove from caches
@@ -495,9 +554,15 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   const uint16_t pixels = led_count == 0 ? 60 : led_count;
   std::vector<uint8_t> frame(pixels * 3, 0);
 
-  const Rgb c1 = parse_hex_color(binding.effect.color1, Rgb{1.0f, 1.0f, 1.0f});
-  const Rgb c2 = parse_hex_color(binding.effect.color2, Rgb{0.6f, 0.4f, 0.0f});
-  const Rgb c3 = parse_hex_color(binding.effect.color3, Rgb{0.0f, 0.2f, 1.0f});
+  // Parse colors with fallback to visible defaults
+  Rgb c1 = parse_hex_color(binding.effect.color1, Rgb{1.0f, 1.0f, 1.0f});
+  Rgb c2 = parse_hex_color(binding.effect.color2, Rgb{0.6f, 0.4f, 0.0f});
+  Rgb c3 = parse_hex_color(binding.effect.color3, Rgb{0.0f, 0.2f, 1.0f});
+  
+  // Ensure colors are not all black (minimum visibility)
+  if (c1.r == 0.0f && c1.g == 0.0f && c1.b == 0.0f) {
+    c1 = Rgb{1.0f, 1.0f, 1.0f};  // Default to white if color1 is black
+  }
   std::vector<GradientStop> gradient;
   if (!binding.effect.gradient.empty()) {
     gradient = build_gradient_from_string(binding.effect.gradient, c1);
@@ -508,8 +573,13 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   const float brightness_override =
       binding.effect.brightness_override > 0 ? binding.effect.brightness_override : binding.effect.brightness;
   float brightness = clamp01(brightness_override / 255.0f) * clamp01(global_brightness / 255.0f);
+  // Ensure minimum brightness for visibility (at least 20% if effect brightness is set)
   if (brightness <= 0.0f) {
-    brightness = 0.01f;
+    // If brightness is 0, use a minimum visible level (10% of max)
+    brightness = 0.1f;
+  } else if (brightness < 0.2f && binding.effect.brightness > 0) {
+    // If brightness is very low but effect brightness is set, ensure at least 20% visibility
+    brightness = std::max(brightness, 0.2f);
   }
 
   // Audio reactivity: ONLY for LEDFx effects, NOT for WLED effects
@@ -628,6 +698,17 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   const float intensity = binding.effect.intensity / 255.0f;
   const float direction = lower_copy(binding.effect.direction) == "reverse" ? -1.0f : 1.0f;
 
+  // Debug: log effect name and parameters
+  if (frame_idx % 300 == 0) {  // Log every 5 seconds at 60fps
+    ESP_LOGI(TAG, "Rendering WLED effect: '%s' (engine=%s, brightness=%.2f, intensity=%.2f, speed=%.2f, pixels=%u)",
+             binding.effect.effect.c_str(),
+             binding.effect.engine.c_str(),
+             brightness,
+             intensity,
+             speed,
+             pixels);
+  }
+
   uint8_t* dst = frame.data();
   if (effect_name.find("rainbow") != std::string::npos) {
     const float base_phase = frame_idx * speed * direction;
@@ -644,17 +725,21 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     return frame;
   }
 
-  if (effect_name.find("solid") != std::string::npos) {
-    const float pulse = 0.6f + (sinf(frame_idx * speed * 1.5f) * 0.5f + 0.5f) * 0.4f * intensity;
+  if (effect_name.find("solid") != std::string::npos || effect_name.empty()) {
+    // Solid color effect - always visible, even with minimal brightness
+    const float pulse = 0.8f + (sinf(frame_idx * speed * 1.5f) * 0.5f + 0.5f) * 0.2f * intensity;
+    // Ensure minimum visibility even if brightness is very low
+    const float min_brightness = std::max(brightness, 0.1f);
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
       const float phase = frame_idx * speed * 0.25f + pos * 0.5f * direction;
       const float sample_pos = phase - std::floor(phase);
       const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, sample_pos);
       // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(base.r * brightness * pulse);
-      *dst++ = to_byte(base.g * brightness * pulse);
-      *dst++ = to_byte(base.b * brightness * pulse);
+      // Ensure colors are visible (at least 10% brightness)
+      *dst++ = to_byte(std::max(0.1f, base.r) * min_brightness * pulse);
+      *dst++ = to_byte(std::max(0.1f, base.g) * min_brightness * pulse);
+      *dst++ = to_byte(std::max(0.1f, base.b) * min_brightness * pulse);
     }
     return frame;
   }
@@ -698,12 +783,10 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   if (effect_name.find("beat") != std::string::npos && effect_name.find("bar") != std::string::npos) {
     AudioMetrics metrics = led_audio_get_metrics();
     const uint16_t bar_count = std::max<uint16_t>(8, pixels / 8);
-    const float bar_width = static_cast<float>(pixels) / bar_count;
     
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
       const uint16_t bar_idx = static_cast<uint16_t>(pos * bar_count);
-      const float bar_pos = (pos * bar_count) - bar_idx;
       
       // WLED effects are not audio-reactive - use time-based animation
       const float level = 0.5f + 0.5f * sinf((frame_idx * 0.1f) + (bar_idx * 0.5f));
@@ -972,7 +1055,22 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     return frame;
   }
 
-  // Default: gradient flow
+  // Default: gradient flow (fallback for unrecognized effects or empty effect name)
+  // This ensures we always render something visible
+  if (effect_name.empty() || effect_name == "none") {
+    // If no effect specified, render a simple solid color with slight animation
+    const float pulse = 0.8f + 0.2f * sinf(frame_idx * speed * 0.5f);
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(c1.r * brightness * pulse);
+      *dst++ = to_byte(c1.g * brightness * pulse);
+      *dst++ = to_byte(c1.b * brightness * pulse);
+    }
+    if (frame_idx % 300 == 0) {
+      ESP_LOGW(TAG, "No effect name specified, rendering default solid color");
+    }
+    return frame;
+  }
+  
   const float move = frame_idx * speed * 0.5f * direction;
   for (uint16_t i = 0; i < pixels; ++i) {
     const float pos = static_cast<float>(i) / static_cast<float>(pixels);
@@ -1000,6 +1098,11 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     *dst++ = to_byte(base.g * brightness * twinkle);
     *dst++ = to_byte(base.b * brightness * twinkle);
   }
+  
+  // Warn if effect was not recognized (reached default fallback)
+  if (frame_idx % 300 == 0) {
+    ESP_LOGW(TAG, "Effect '%s' not recognized, using default gradient flow", binding.effect.effect.c_str());
+  }
   return frame;
 }
 
@@ -1026,6 +1129,22 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   } else {
     // Render new frame and cache it
     frame = render_frame(binding, leds, frame_idx, global_brightness, fps);
+    
+    // Verify frame is not empty (all zeros)
+    bool frame_empty = true;
+    for (size_t i = 0; i < frame.size(); ++i) {
+      if (frame[i] != 0) {
+        frame_empty = false;
+        break;
+      }
+    }
+    if (frame_empty && frame_idx % 300 == 0) {
+      ESP_LOGW(TAG, "Rendered frame is empty (all zeros) for effect '%s' on device %s (brightness=%.2f, intensity=%.2f)",
+               binding.effect.effect.c_str(), device.id.c_str(), 
+               binding.effect.brightness_override > 0 ? binding.effect.brightness_override / 255.0f : binding.effect.brightness / 255.0f,
+               intensity);
+    }
+    
     // Only cache if cache is not too large (limit to 10 entries to avoid memory issues)
     if (frame_cache_.size() < 10) {
       frame_cache_[cache_key] = frame;
@@ -1083,11 +1202,21 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
     }
     // Invalidate cache on failure
     ddp_addr_cache_.erase(ip);
-  } else if (frame_idx % 300 == 0) {  // Log success every 5 seconds for debugging
-    ESP_LOGI(TAG, "DDP send OK -> %s:%u (device %s, effect: %s, %u LEDs, channel %lu)", 
+    } else if (frame_idx % 300 == 0) {  // Log success every 5 seconds for debugging
+    // Check if frame has any non-zero data
+    bool has_data = false;
+    for (size_t i = 0; i < frame.size() && i < 9; ++i) {  // Check first 3 pixels
+      if (frame[i] != 0) {
+        has_data = true;
+        break;
+      }
+    }
+    ESP_LOGI(TAG, "DDP send OK -> %s:%u (device %s, effect: %s, %u LEDs, channel %lu, has_data=%d, brightness=%.2f)", 
              ip.c_str(), port, device.id.c_str(), binding.effect.effect.c_str(), 
              static_cast<unsigned>(device.leds == 0 ? 60 : device.leds),
-             static_cast<unsigned long>(channel));
+             static_cast<unsigned long>(channel),
+             has_data ? 1 : 0,
+             binding.effect.brightness_override > 0 ? binding.effect.brightness_override / 255.0f : binding.effect.brightness / 255.0f);
   }
   
   return ok;
@@ -1095,8 +1224,9 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
 
 void WledEffectsRuntime::task_loop() {
   uint32_t frame_idx = 0;
-  uint64_t last_audio_timestamp_us = 0;
-  uint64_t last_render_time_us = 0;
+  // Variables for future use (audio sync timing, performance monitoring)
+  // [[maybe_unused]] uint64_t last_audio_timestamp_us = 0;
+  // [[maybe_unused]] uint64_t last_render_time_us = 0;
   
   while (running_) {
     WledEffectsConfig fx{};
@@ -1133,12 +1263,18 @@ void WledEffectsRuntime::task_loop() {
     AudioMetrics audio_metrics = led_audio_get_metrics();
     const uint64_t now_us = esp_timer_get_time();
     
-    // If audio has a timestamp and we're rendering audio-reactive effects, sync to it
+    // If audio has a timestamp and we're rendering audio-reactive LEDFx effects, sync to it
+    // NOTE: Audio frame sync should ONLY apply to LEDFx effects with audio_link=true, NOT to WLED effects
     bool needs_audio_sync = false;
     for (const auto& binding : fx.bindings) {
       if (binding.enabled && binding.effect.audio_link) {
-        needs_audio_sync = true;
-        break;
+        // Only sync for LEDFx effects, not WLED effects
+        const std::string engine = lower_copy(binding.effect.engine);
+        const bool is_ledfx = (engine == "ledfx");
+        if (is_ledfx) {
+          needs_audio_sync = true;
+          break;
+        }
       }
     }
     
@@ -1155,10 +1291,10 @@ void WledEffectsRuntime::task_loop() {
           vTaskDelay(pdMS_TO_TICKS((wait_us / 1000) + 1));
         }
       }
-      last_audio_timestamp_us = audio_metrics.timestamp_us;
+      // last_audio_timestamp_us = audio_metrics.timestamp_us;  // Reserved for future use
     }
     
-    last_render_time_us = esp_timer_get_time();
+    // last_render_time_us = esp_timer_get_time();  // Reserved for future use
 
     // Continue even if no WLED devices - we may have local segments to render
     const bool has_wled_bindings = !fx.bindings.empty() && !devices_snapshot.empty();
@@ -1202,33 +1338,54 @@ void WledEffectsRuntime::task_loop() {
       ESP_LOGD(TAG, "No WLED devices configured (%zu bindings)", fx.bindings.size());
     }
     for (const auto& binding : fx.bindings) {
-      if (!binding.enabled) {
-        ESP_LOGD(TAG, "Binding for device %s is disabled", binding.device_id.c_str());
+      // Resolve device first to get IP (needed for cleanup even if disabled)
+      WledDeviceConfig dev{};
+      std::string ip;
+      bool device_resolved = false;
+      if (!binding.device_id.empty()) {
+        device_resolved = resolve_device(binding.device_id, devices_snapshot, status, dev, ip);
+      }
+      
+      // If device is disabled or DDP is disabled, immediately disable DDP mode and remove from active list
+      if (!binding.enabled || !binding.ddp || !device_resolved || ip.empty()) {
+        if (device_resolved && !ip.empty()) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (active_ddp_devices_.find(ip) != active_ddp_devices_.end()) {
+            // Device was active but is now disabled - send black frame first, then disable DDP
+            ESP_LOGI(TAG, "Device %s disabled - sending black frame and disabling DDP mode", ip.c_str());
+            
+            // Send a black frame immediately to stop the effect visually
+            const uint16_t leds = dev.leds == 0 ? 60 : dev.leds;
+            std::vector<uint8_t> black_frame(leds * 3, 0);  // All zeros = black
+            
+            uint16_t port = kDefaultDdpPort;
+            if (cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0) {
+              port = cfg_ref_->mqtt.ddp_port;
+            }
+            const uint32_t channel = static_cast<uint32_t>(binding.segment_index == 0 ? 1 : binding.segment_index);
+            
+            // Send black frame immediately (don't cache, don't wait)
+            ddp_send_frame(ip, port, black_frame, channel, 0, seq_++);
+            
+            // Then disable DDP mode
+            disable_wled_ddp_mode(ip);
+            active_ddp_devices_.erase(ip);
+          }
+        }
+        if (!binding.enabled) {
+          ESP_LOGD(TAG, "Binding for device %s is disabled", binding.device_id.c_str());
+        } else if (!binding.ddp) {
+          ESP_LOGD(TAG, "Binding for device %s has DDP disabled", binding.device_id.c_str());
+        }
         continue;
       }
-      if (binding.device_id.empty()) {
-        ESP_LOGD(TAG, "Binding has empty device_id");
-        continue;
-      }
-      if (!binding.ddp) {
-        ESP_LOGD(TAG, "Binding for device %s has DDP disabled", binding.device_id.c_str());
-        continue;
-      }
+      
       // Check if effect is assigned
       if (binding.effect.effect.empty()) {
         ESP_LOGW(TAG, "Binding for device %s has no effect assigned", binding.device_id.c_str());
         continue;
       }
-      WledDeviceConfig dev{};
-      std::string ip;
-      if (!resolve_device(binding.device_id, devices_snapshot, status, dev, ip)) {
-        ESP_LOGW(TAG, "Cannot resolve device %s (not found or inactive)", binding.device_id.c_str());
-        continue;
-      }
-      if (ip.empty()) {
-        ESP_LOGW(TAG, "Device %s has no IP address", binding.device_id.c_str());
-        continue;
-      }
+      
       // Track this device as having active DDP mode
       {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1247,9 +1404,10 @@ void WledEffectsRuntime::task_loop() {
       }
     }
     
-    // Clean up devices that are no longer active (removed from bindings)
-    // This prevents keeping DDP mode enabled for devices that are no longer configured
-    if (frame_idx % 1800 == 0) {  // Check every 30 seconds
+    // Clean up devices that are no longer active (removed from bindings or device not found)
+    // This is a backup cleanup - immediate cleanup happens above when binding is disabled
+    // Check more frequently (every 5 seconds instead of 30) for faster response
+    if (frame_idx % 300 == 0) {  // Check every 5 seconds at 60fps
       std::unordered_set<std::string> current_active_ips;
       for (const auto& binding : fx.bindings) {
         if (!binding.enabled || !binding.ddp || binding.device_id.empty()) {

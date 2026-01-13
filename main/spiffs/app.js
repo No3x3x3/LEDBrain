@@ -556,6 +556,8 @@ function renderLang() {
 
   if (state.info) {
     updateOverview();
+    // Refresh device preview after info update
+    renderDevicePreview();
   }
   renderWledDevices();
   renderEffectCatalog("wled"); // Default to WLED
@@ -817,8 +819,12 @@ async function toggleAll() {
         }
       }
       updateOverview();
+    // Refresh device preview after info update
+    renderDevicePreview();
     }
     updateControlButtons();
+    // Refresh device preview to show current states (but individual buttons remain independent)
+    renderDevicePreview();
   } catch (err) {
     console.error(err);
     notify(t("toast_save_failed"), "error");
@@ -938,6 +944,8 @@ async function toggleEffects() {
     if (state.info && state.info.led_engine) {
       state.info.led_engine.enabled = next;
       updateOverview();
+    // Refresh device preview after info update
+    renderDevicePreview();
     }
     updateControlButtons();
   } catch (err) {
@@ -962,6 +970,8 @@ async function toggleAudio() {
     if (state.info && state.info.led_engine && state.info.led_engine.audio) {
       state.info.led_engine.audio.running = next;
       updateOverview();
+    // Refresh device preview after info update
+    renderDevicePreview();
     }
     updateControlButtons();
   } catch (err) {
@@ -1412,28 +1422,40 @@ function renderDevicePreview() {
   
   // WLED devices
   const wledDevices = mergeWledDevices();
+  const fx = ensureWledEffectsConfig();
   wledDevices.forEach(dev => {
+    // Get actual binding state for this device
+    const binding = fx.bindings.find(b => 
+      b.device_id === (dev.id || dev.address || dev.name)
+    );
+    const isEnabled = binding ? (binding.enabled !== false) : (dev.on !== false);
+    // Get effect name from binding, not from device
+    const effectName = binding?.effect?.effect || null;
     allDevices.push({
       id: dev.id || `wled-${dev.name}`,
       name: dev.name || "WLED Device",
       type: "wled",
       leds: dev.leds || 0,
-      effect: dev.effect || null,
-      enabled: dev.on !== false,
-      data: dev
+      effect: effectName,
+      enabled: isEnabled,
+      data: dev,
+      binding: binding  // Store binding for later use
     });
   });
   
   // Physical segments
   const physicalSegs = buildPhysicalSegmentsSummary();
   physicalSegs.forEach(seg => {
+    // Get effect assignment for physical segment
+    const assignment = state.config?.led?.segments?.find(s => s.id === seg.id)?.effect;
     allDevices.push({
       id: seg.id || `physical-${seg.name}`,
       name: seg.name || "Physical Segment",
       type: "physical",
       leds: seg.leds || 0,
-      effect: seg.effect || null,
+      effect: seg.effect || assignment?.effect || null,
       enabled: seg.enabled !== false,
+      binding: assignment,  // Store effect assignment for colors/brightness
       data: seg
     });
   });
@@ -1441,13 +1463,17 @@ function renderDevicePreview() {
   // Virtual segments
   const virtualSegs = buildVirtualSegmentsSummary();
   virtualSegs.forEach(seg => {
+    // Get effect assignment for virtual segment
+    const virtualSeg = state.config?.virtual_segments?.find(v => v.id === seg.id);
+    const assignment = virtualSeg?.effect;
     allDevices.push({
       id: seg.id || `virtual-${seg.name}`,
       name: seg.name || "Virtual Segment",
       type: "virtual",
       leds: seg.leds || 0,
-      effect: seg.effect || null,
+      effect: seg.effect || assignment?.effect || null,
       enabled: seg.enabled !== false,
+      binding: assignment,  // Store effect assignment for colors/brightness
       data: seg
     });
   });
@@ -1529,19 +1555,33 @@ function renderDevicePreview() {
     `;
     toggleBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      // Toggle device enabled state
+      e.preventDefault();
+      // Toggle device enabled state - INDEPENDENT from global start/stop
       if (device.type === "wled") {
         // Toggle WLED device binding
         const binding = getWledBinding(device.data.id || device.data.address || device.data.name);
         if (binding) {
-          binding.enabled = !binding.enabled;
+          const wasEnabled = binding.enabled !== false;
+          binding.enabled = !wasEnabled;
           await saveWledEffects();
-          // Update button state and icons
-          toggleBtn.dataset.state = binding.enabled ? "playing" : "stopped";
+          
+          // Update button state and icons immediately
+          const newState = binding.enabled ? "playing" : "stopped";
+          toggleBtn.dataset.state = newState;
           const playIcon = toggleBtn.querySelector(".icon-play");
           const pauseIcon = toggleBtn.querySelector(".icon-pause");
           if (playIcon) playIcon.style.display = binding.enabled ? "" : "none";
           if (pauseIcon) pauseIcon.style.display = binding.enabled ? "none" : "";
+          
+          // If disabling, backend will handle stopping DDP and restoring previous state
+          // No need to send commands from frontend - backend does this automatically
+          if (binding.enabled) {
+            // If enabling, ensure DDP is enabled
+            binding.ddp = true;
+            await saveWledEffects();
+          }
+          
+          // Re-render to update all device previews
           renderDevicePreview();
         }
       } else if (device.type === "physical") {
@@ -1550,14 +1590,19 @@ function renderDevicePreview() {
         if (led && device.data) {
           const seg = (led.segments || []).find(s => s.id === device.data.id || s.segment_id === device.data.segment_id);
           if (seg) {
-            seg.enabled = !seg.enabled;
+            const wasEnabled = seg.enabled !== false;
+            seg.enabled = !wasEnabled;
             await saveLedConfig();
-            // Update button state and icons
-            toggleBtn.dataset.state = seg.enabled ? "playing" : "stopped";
+            
+            // Update button state and icons immediately
+            const newState = seg.enabled ? "playing" : "stopped";
+            toggleBtn.dataset.state = newState;
             const playIcon = toggleBtn.querySelector(".icon-play");
             const pauseIcon = toggleBtn.querySelector(".icon-pause");
             if (playIcon) playIcon.style.display = seg.enabled ? "" : "none";
             if (pauseIcon) pauseIcon.style.display = seg.enabled ? "none" : "";
+            
+            // Re-render to update all device previews
             renderDevicePreview();
           }
         }
@@ -1566,14 +1611,19 @@ function renderDevicePreview() {
         ensureVirtualSegments();
         const seg = (state.config.virtual_segments || []).find(s => s.id === device.data.id || s.name === device.data.name);
         if (seg) {
-          seg.enabled = seg.enabled === false ? true : false;
+          const wasEnabled = seg.enabled !== false;
+          seg.enabled = !wasEnabled;
           await saveLedConfig();
-          // Update button state and icons
-          toggleBtn.dataset.state = seg.enabled !== false ? "playing" : "stopped";
+          
+          // Update button state and icons immediately
+          const newState = seg.enabled !== false ? "playing" : "stopped";
+          toggleBtn.dataset.state = newState;
           const playIcon = toggleBtn.querySelector(".icon-play");
           const pauseIcon = toggleBtn.querySelector(".icon-pause");
           if (playIcon) playIcon.style.display = seg.enabled !== false ? "" : "none";
           if (pauseIcon) pauseIcon.style.display = seg.enabled !== false ? "none" : "";
+          
+          // Re-render to update all device previews
           renderDevicePreview();
         }
       }
@@ -1662,12 +1712,21 @@ function startPreviewAnimation() {
   }
   
   const canvases = document.querySelectorAll(".preview-device-canvas");
-  if (canvases.length === 0) return;
+  if (canvases.length === 0) {
+    console.log("startPreviewAnimation: No canvases found, preview may not be initialized yet");
+    return;
+  }
   
   const previewEnabled = qs("previewEnabled")?.checked ?? true;
-  if (!previewEnabled) return;
+  if (!previewEnabled) {
+    console.log("startPreviewAnimation: Preview disabled by user");
+    return;
+  }
+  
+  console.log(`startPreviewAnimation: Starting animation for ${canvases.length} canvas(es)`);
   
   function animate() {
+    let renderedCount = 0;
     canvases.forEach(canvas => {
       const deviceId = canvas.dataset.deviceId;
       const card = canvas.closest(".preview-device-card");
@@ -1678,6 +1737,7 @@ function startPreviewAnimation() {
       
       if (deviceData && deviceData.enabled !== false) {
         renderPreviewFrame(canvas, deviceData, previewFrameIndex);
+        renderedCount++;
       } else {
         // Clear canvas if disabled
         const ctx = canvas.getContext("2d");
@@ -1685,6 +1745,11 @@ function startPreviewAnimation() {
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
     });
+    
+    // Log every 5 seconds (at ~60fps, that's every 300 frames)
+    if (previewFrameIndex % 300 === 0 && renderedCount > 0) {
+      console.log(`Preview animation: rendering ${renderedCount} device(s), frame ${previewFrameIndex}`);
+    }
     
     previewFrameIndex++;
     previewAnimationFrame = requestAnimationFrame(animate);
@@ -1696,13 +1761,52 @@ function startPreviewAnimation() {
 function getDeviceData(deviceId, deviceType) {
   // Get device data from state
   if (deviceType === "wled") {
-    return state.wledDevices?.find(d => (d.id || `wled-${d.name}`) === deviceId);
+    // Find device in wledDevices
+    const dev = state.wledDevices?.find(d => (d.id || `wled-${d.name}`) === deviceId);
+    if (!dev) return null;
+    
+    // Get binding to access effect configuration
+    const fx = ensureWledEffectsConfig();
+    const binding = fx.bindings.find(b => 
+      b.device_id === (dev.id || dev.address || dev.name)
+    );
+    
+    // Return device data with effect from binding
+    return {
+      id: dev.id || `wled-${dev.name}`,
+      name: dev.name || "WLED Device",
+      type: "wled",
+      leds: dev.leds || 0,
+      effect: binding?.effect?.effect || null,
+      enabled: binding ? (binding.enabled !== false) : (dev.on !== false),
+      binding: binding,  // Store full binding for effect details (colors, brightness, etc.)
+      data: dev
+    };
   } else if (deviceType === "physical") {
     const segs = buildPhysicalSegmentsSummary();
-    return segs.find(s => (s.id || `physical-${s.name}`) === deviceId);
+    const seg = segs.find(s => (s.id || `physical-${s.name}`) === deviceId);
+    if (!seg) return null;
+    
+    // Get effect assignment for physical segment
+    const assignment = state.config?.led?.segments?.find(s => s.id === seg.id)?.effect;
+    return {
+      ...seg,
+      effect: seg.effect || assignment?.effect || null,
+      binding: assignment  // Store effect assignment for colors/brightness
+    };
   } else if (deviceType === "virtual") {
     const segs = buildVirtualSegmentsSummary();
-    return segs.find(s => (s.id || `virtual-${s.name}`) === deviceId);
+    const seg = segs.find(s => (s.id || `virtual-${s.name}`) === deviceId);
+    if (!seg) return null;
+    
+    // Get effect assignment for virtual segment
+    const virtualSeg = state.config?.virtual_segments?.find(v => v.id === seg.id);
+    const assignment = virtualSeg?.effect;
+    return {
+      ...seg,
+      effect: seg.effect || assignment?.effect || null,
+      binding: assignment  // Store effect assignment for colors/brightness
+    };
   }
   return null;
 }
@@ -1717,34 +1821,101 @@ function renderPreviewFrame(canvas, device, frameIndex) {
   ctx.fillStyle = "#0a0f18";
   ctx.fillRect(0, 0, width, height);
   
-  // Simple effect simulation based on effect name
-  const effect = device.effect || "Solid";
+  // Get effect name and colors from device or binding
+  const effect = device.effect || (device.binding?.effect?.effect) || "Solid";
+  const binding = device.binding || device.data?.binding;
+  const effectConfig = binding?.effect || {};
+  
+  // Parse colors from binding or use defaults
+  const parseColor = (hex) => {
+    if (!hex || typeof hex !== "string") return null;
+    const clean = hex.replace("#", "");
+    if (clean.length !== 6) return null;
+    const r = parseInt(clean.substr(0, 2), 16);
+    const g = parseInt(clean.substr(2, 2), 16);
+    const b = parseInt(clean.substr(4, 2), 16);
+    return { r, g, b };
+  };
+  
+  const c1 = parseColor(effectConfig.color1) || { r: 255, g: 255, b: 255 };
+  const c2 = parseColor(effectConfig.color2) || { r: 153, g: 102, b: 0 };
+  const c3 = parseColor(effectConfig.color3) || { r: 0, g: 51, b: 255 };
+  
+  // Get brightness (0-1)
+  const brightness = effectConfig.brightness ? Math.min(1, effectConfig.brightness / 255) : 1;
+  const intensity = effectConfig.intensity ? effectConfig.intensity / 255 : 0.5;
+  const speed = effectConfig.speed ? 0.02 + (effectConfig.speed / 255) * 0.25 : 0.1;
+  
   const pixelWidth = width / leds;
+  const effectLower = effect.toLowerCase();
   
   for (let i = 0; i < leds; i++) {
     let r = 0, g = 0, b = 0;
+    const pos = i / leds;
     
-    if (effect.toLowerCase().includes("rainbow")) {
-      const hue = ((i / leds) * 360 + frameIndex * 2) % 360;
-      const rgb = hslToRgb(hue / 360, 1, 0.5);
+    if (effectLower.includes("rainbow")) {
+      const hue = ((pos * 360 + frameIndex * speed * 10) % 360) / 360;
+      const rgb = hslToRgb(hue, 1, 0.5);
       r = rgb[0];
       g = rgb[1];
       b = rgb[2];
-    } else if (effect.toLowerCase().includes("fire")) {
-      const intensity = Math.sin((i / leds) * Math.PI * 2 + frameIndex * 0.1) * 0.5 + 0.5;
-      r = Math.floor(255 * intensity);
-      g = Math.floor(100 * intensity);
-      b = Math.floor(20 * intensity);
-    } else if (effect.toLowerCase().includes("wave")) {
-      const wave = Math.sin((i / leds) * Math.PI * 4 + frameIndex * 0.1) * 0.5 + 0.5;
-      r = Math.floor(100 * wave);
-      g = Math.floor(150 * wave);
-      b = Math.floor(255 * wave);
+    } else if (effectLower.includes("solid")) {
+      // Solid color with slight pulse
+      const pulse = 0.8 + Math.sin(frameIndex * speed * 5) * 0.2;
+      r = c1.r * pulse;
+      g = c1.g * pulse;
+      b = c1.b * pulse;
+    } else if (effectLower.includes("fire")) {
+      const intensity = Math.sin((pos * Math.PI * 2 + frameIndex * speed * 2) * 0.5) * 0.5 + 0.5;
+      r = Math.floor(c1.r * intensity);
+      g = Math.floor(c1.g * intensity * 0.4);
+      b = Math.floor(c1.b * intensity * 0.1);
+    } else if (effectLower.includes("wave") || effectLower.includes("flow")) {
+      const wave = Math.sin((pos * Math.PI * 4 + frameIndex * speed * 3)) * 0.5 + 0.5;
+      r = c1.r * (1 - wave) + c2.r * wave;
+      g = c1.g * (1 - wave) + c2.g * wave;
+      b = c1.b * (1 - wave) + c2.b * wave;
+    } else if (effectLower.includes("chase") || effectLower.includes("theater")) {
+      const move = (frameIndex * speed * 5) % 1;
+      const dist = Math.abs(pos - move);
+      const level = dist < 0.1 ? 1 : (dist < 0.2 ? 0.5 : 0);
+      r = c1.r * level;
+      g = c1.g * level;
+      b = c1.b * level;
+    } else if (effectLower.includes("meteor")) {
+      const move = (frameIndex * speed * 3) % 1;
+      const dist = Math.abs(pos - move);
+      const level = dist < 0.15 ? (1 - dist / 0.15) : 0;
+      r = c1.r * level;
+      g = c1.g * level;
+      b = c1.b * level;
+    } else if (effectLower.includes("rain")) {
+      const drop = Math.sin((pos * 10 + frameIndex * speed * 2) % Math.PI) * 0.5 + 0.5;
+      r = c1.r * drop;
+      g = c1.g * drop;
+      b = c1.b * drop;
     } else {
-      // Default solid color
-      r = 255;
-      g = 140;
-      b = 210;
+      // Default: gradient flow
+      const t = (pos + frameIndex * speed * 0.5) % 1;
+      const mix = Math.sin(t * Math.PI * 2) * 0.5 + 0.5;
+      r = c1.r * (1 - t) + c2.r * t;
+      g = c1.g * (1 - t) + c2.g * t;
+      b = c1.b * (1 - t) + c2.b * t;
+      r = r * (1 - mix) + c3.r * mix;
+      g = g * (1 - mix) + c3.g * mix;
+      b = b * (1 - mix) + c3.b * mix;
+    }
+    
+    // Apply brightness
+    r = Math.floor(r * brightness);
+    g = Math.floor(g * brightness);
+    b = Math.floor(b * brightness);
+    
+    // Ensure minimum visibility
+    if (r === 0 && g === 0 && b === 0 && brightness > 0) {
+      r = Math.floor(c1.r * brightness * 0.1);
+      g = Math.floor(c1.g * brightness * 0.1);
+      b = Math.floor(c1.b * brightness * 0.1);
     }
     
     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
@@ -1871,53 +2042,42 @@ function renderWledDetail(dev) {
     saveWledEffects();
   });
   
-  // Toggle button for play/pause
+  // Remove any existing event listeners to prevent duplicates
+  const existingBtn = qs("btnWledToggle");
+  if (existingBtn) {
+    const newBtn = existingBtn.cloneNode(true);
+    existingBtn.parentNode?.replaceChild(newBtn, existingBtn);
+  }
+  
+  // Toggle button for play/pause - INDEPENDENT from global start/stop
   qs("btnWledToggle")?.addEventListener("click", async (ev) => {
     ev.preventDefault();
+    ev.stopPropagation();
     const wasEnabled = binding.enabled !== false;
     binding.enabled = !wasEnabled;
-    const enabledCheckbox = qs("wledFxEnabled");
-    if (enabledCheckbox) {
-      enabledCheckbox.checked = binding.enabled;
-    }
+    
+    // Update UI immediately for visual feedback
     const toggleBtn = qs("btnWledToggle");
     if (toggleBtn) {
-      toggleBtn.dataset.state = binding.enabled ? "playing" : "stopped";
+      const newState = binding.enabled ? "playing" : "stopped";
+      toggleBtn.dataset.state = newState;
       const playIcon = toggleBtn.querySelector(".icon-play");
       const pauseIcon = toggleBtn.querySelector(".icon-pause");
       if (playIcon) playIcon.style.display = binding.enabled ? "" : "none";
       if (pauseIcon) pauseIcon.style.display = binding.enabled ? "none" : "";
     }
-    // Save configuration first
+    
+    const enabledCheckbox = qs("wledFxEnabled");
+    if (enabledCheckbox) {
+      enabledCheckbox.checked = binding.enabled;
+    }
+    
+    // Save configuration
     await saveWledEffects();
     
-    // If disabling, send command to WLED to stop DDP and return to local effects
-    if (!binding.enabled && dev.address) {
-      try {
-        // Send HTTP command to WLED to:
-        // 1. Turn on (T=1) - ensure device is on
-        // 2. Disable DDP receive mode by setting a local effect
-        // 3. Set brightness to previous level or default
-        const address = dev.address || dev.ip;
-        if (address) {
-          // First, get current state to preserve brightness
-          let brightness = 255;
-          try {
-            const stateRes = await fetch(`http://${address}/json/state`, { method: "GET", timeout: 2000 });
-            if (stateRes.ok) {
-              const state = await stateRes.json();
-              brightness = state.bri || 255;
-            }
-          } catch (err) {
-            console.warn("Could not fetch WLED state:", err);
-          }
-          // Turn on and set a simple local effect (Solid color)
-          await fetch(`http://${address}/win&T=1&FX=0&R=255&G=0&B=0&BR=${brightness}`, { method: "GET", timeout: 2000 });
-        }
-      } catch (err) {
-        console.warn("Failed to send stop command to WLED:", err);
-      }
-    } else if (binding.enabled) {
+    // If disabling, backend will handle stopping DDP and restoring previous state
+    // No need to send commands from frontend - backend does this automatically
+    if (binding.enabled) {
       // If enabling, ensure DDP is enabled
       binding.ddp = true;
       const ddpCheckbox = qs("wledFxDdp");
@@ -1926,6 +2086,9 @@ function renderWledDetail(dev) {
       }
       await saveWledEffects();
     }
+    
+    // Update device preview if visible
+    renderDevicePreview();
   });
   qs("wledFxDdp")?.addEventListener("change", (ev) => {
     binding.ddp = ev.target.checked;
@@ -2342,17 +2505,65 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
     saveFn();
   });
   qs("devFxEffect")?.addEventListener("change", async (ev) => {
-    assignment.effect = ev.target.value || "";
-    // Update description
-    const meta = findEffectMeta(assignment.effect);
-    const desc = qs("fxEffectDescription");
-    if (desc && meta) {
-      desc.textContent = meta.desc || "";
-    }
-    // For WLED devices, enable the device and ensure effect is applied immediately
-    if (isWled && assignment.effect && wledBinding) {
-      // Enable the device when effect is selected
+    const effectName = ev.target.value || "";
+    assignment.effect = effectName;
+    
+    // For WLED devices, ensure binding.effect is properly structured
+    if (isWled && wledBinding) {
+      // Ensure binding.effect is an object
+      if (!wledBinding.effect || typeof wledBinding.effect !== "object") {
+        wledBinding.effect = {};
+      }
+      // Set the effect name
+      wledBinding.effect.effect = effectName;
+      // Ensure engine is set
+      if (!wledBinding.effect.engine) {
+        wledBinding.effect.engine = "wled";
+      }
+      
+      // Apply effect-specific defaults (colors, brightness, etc.)
+      if (effectName) {
+        applyEffectDefaults(wledBinding.effect, effectName, "wled", true);
+      }
+      
+      // Ensure default values are set (fallback if applyEffectDefaults didn't set them)
+      // Brightness must be > 0 for visibility
+      if (typeof wledBinding.effect.brightness !== "number" || wledBinding.effect.brightness <= 0) {
+        wledBinding.effect.brightness = 255;
+      }
+      if (typeof wledBinding.effect.intensity !== "number" || wledBinding.effect.intensity <= 0) {
+        wledBinding.effect.intensity = 128;
+      }
+      if (typeof wledBinding.effect.speed !== "number" || wledBinding.effect.speed <= 0) {
+        wledBinding.effect.speed = 128;
+      }
+      // Ensure colors are set and not black
+      if (!wledBinding.effect.color1 || wledBinding.effect.color1 === "#000000" || wledBinding.effect.color1 === "000000") {
+        wledBinding.effect.color1 = "#ffffff";
+      }
+      if (!wledBinding.effect.color2 || wledBinding.effect.color2 === "#000000" || wledBinding.effect.color2 === "000000") {
+        wledBinding.effect.color2 = "#ff6600";
+      }
+      if (!wledBinding.effect.color3 || wledBinding.effect.color3 === "#000000" || wledBinding.effect.color3 === "000000") {
+        wledBinding.effect.color3 = "#0066ff";
+      }
+      
+      console.log("WLED effect configured:", {
+        effect: wledBinding.effect.effect,
+        brightness: wledBinding.effect.brightness,
+        intensity: wledBinding.effect.intensity,
+        speed: wledBinding.effect.speed,
+        color1: wledBinding.effect.color1,
+        color2: wledBinding.effect.color2,
+        color3: wledBinding.effect.color3,
+        enabled: wledBinding.enabled,
+        ddp: wledBinding.ddp
+      });
+      
+      // Enable the device and DDP when effect is selected
       wledBinding.enabled = true;
+      wledBinding.ddp = true;
+      
       // Update UI toggle button
       const toggleBtn = qs("btnWledToggle");
       if (toggleBtn) {
@@ -2362,13 +2573,28 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
         if (playIcon) playIcon.style.display = "";
         if (pauseIcon) pauseIcon.style.display = "none";
       }
+      
       // Update enabled checkbox
       const enabledCheckbox = qs("wledFxEnabled");
       if (enabledCheckbox) {
         enabledCheckbox.checked = true;
       }
+      
+      // Update DDP checkbox
+      const ddpCheckbox = qs("wledFxDdp");
+      if (ddpCheckbox) {
+        ddpCheckbox.checked = true;
+      }
+      
+      console.log("WLED effect selected:", effectName, "Binding:", wledBinding);
       await saveFn();
-    } else if (!isWled && assignment.effect) {
+    } else if (!isWled && effectName) {
+      // Update description
+      const meta = findEffectMeta(effectName);
+      const desc = qs("fxEffectDescription");
+      if (desc && meta) {
+        desc.textContent = meta.desc || "";
+      }
       // For physical/virtual segments, enable the segment when effect is selected
       if (virtualSegment) {
         // Virtual segment
@@ -2379,6 +2605,12 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
       }
       saveFn();
     } else {
+      // Update description
+      const meta = findEffectMeta(effectName);
+      const desc = qs("fxEffectDescription");
+      if (desc && meta) {
+        desc.textContent = meta.desc || "";
+      }
       saveFn();
     }
   });
@@ -3085,7 +3317,15 @@ function renderWledDevices() {
 async function refreshInfo(showToast = false) {
   try {
     const info = await (await fetch("/api/info")).json();
+    // Preserve audio running state if it was manually set (don't let refreshInfo override user's choice)
+    const previousAudioRunning = state.info?.led_engine?.audio?.running;
     state.info = info;
+    // If audio was manually disabled, don't let refreshInfo re-enable it
+    if (previousAudioRunning === false && info?.led_engine?.audio?.running === true) {
+      // User had disabled audio, but backend says it's running - this shouldn't happen if endpoint works
+      // But we'll respect the backend state for now (the endpoint should handle this)
+      console.log("Audio state mismatch: user disabled but backend reports running");
+    }
     if (info?.led_engine && typeof info.led_engine.brightness === "number") {
       state.globalBrightness = clamp(info.led_engine.brightness, 1, MAX_BRIGHTNESS);
       syncBrightnessUi();
@@ -3110,6 +3350,8 @@ async function refreshInfo(showToast = false) {
     }
     
     updateOverview();
+    // Refresh device preview after info update
+    renderDevicePreview();
     startUptimeTicker();
     if (showToast) {
       notify(t("toast_refreshed"), "ok");
@@ -4801,6 +5043,8 @@ async function loadConfig() {
     if (typeof state.globalBrightness === "number") {
       syncBrightnessUi();
     }
+    // Refresh device preview after config and info are loaded
+    renderDevicePreview();
     startAutoRefreshLoops();
   } catch (err) {
     console.error(err);
@@ -4939,6 +5183,8 @@ async function saveNetwork(reboot = true) {
     state.config = state.config || {};
     state.config.network = payload.network;
     updateOverview();
+    // Refresh device preview after info update
+    renderDevicePreview();
     notify(reboot ? t("toast_saved_reboot") : t("toast_saved"), "ok");
     if (reboot) {
       setTimeout(() => {
@@ -4976,6 +5222,8 @@ async function saveMqtt() {
       ...payload.mqtt,
     };
     updateOverview();
+    // Refresh device preview after info update
+    renderDevicePreview();
     notify(t("toast_saved_reboot"), "ok");
     setTimeout(() => {
       fetch("/api/reboot", { method: "POST" });
@@ -5104,26 +5352,55 @@ async function checkOta() {
 
 async function triggerOta() {
   const rel = state.latestRelease;
-  const target = (rel?.tag || state.info?.fw_version || t("ota_unknown_version")).trim();
+  if (!rel || !rel.url) {
+    notify(t("toast_ota_failed") || "No update URL available", "error");
+    setOtaStatus(t("ota_status_error") || "Error: No URL");
+    return;
+  }
+  const target = (rel.tag || state.info?.fw_version || t("ota_unknown_version")).trim();
   const confirmMsg = t("confirm_ota_install").replace("{version}", target);
   if (!window.confirm(confirmMsg)) return;
   try {
     notify(t("toast_ota_start"), "ok");
     setOtaStatus(t("ota_status_installing").replace("{version}", target));
-    const body = rel?.url ? JSON.stringify({ url: rel.url }) : undefined;
+    console.log("Starting OTA update from URL:", rel.url);
     const res = await fetch("/api/ota/update", {
       method: "POST",
-      ...(body ? { body } : {}),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url: rel.url }),
     });
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+      const errorText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errorText}`);
     }
-    notify(t("toast_ota_running"), "ok");
-    setTimeout(() => refreshInfo(), 1500);
+    const responseText = await res.text();
+    console.log("OTA update response:", responseText);
+    notify(t("toast_ota_running") || "OTA update started", "ok");
+    setOtaStatus(t("ota_status_installing").replace("{version}", target) + " - " + responseText);
+    // Wait a bit longer before refreshing to allow OTA to start
+    setTimeout(() => {
+      refreshInfo();
+      // Check OTA status periodically
+      let checkCount = 0;
+      const statusInterval = setInterval(async () => {
+        checkCount++;
+        if (checkCount > 30) { // Stop after 30 checks (30 seconds)
+          clearInterval(statusInterval);
+          return;
+        }
+        try {
+          await refreshInfo();
+        } catch (err) {
+          console.error("Error checking OTA status:", err);
+        }
+      }, 1000);
+    }, 2000);
   } catch (err) {
-    console.error(err);
-    notify(t("toast_ota_failed"), "error");
-    setOtaStatus(t("ota_status_error"));
+    console.error("OTA update error:", err);
+    notify(t("toast_ota_failed") || "OTA update failed: " + err.message, "error");
+    setOtaStatus(t("ota_status_error") || "Error: " + err.message);
   }
 }
 
@@ -5578,8 +5855,73 @@ function initEvents() {
   }
 }
 
+// Responsive scaling function
+function applyResponsiveScaling() {
+  const viewport = {
+    width: window.innerWidth || document.documentElement.clientWidth,
+    height: window.innerHeight || document.documentElement.clientHeight,
+  };
+  
+  // Base reference: 1920x1080 (Full HD)
+  const baseWidth = 1920;
+  const baseHeight = 1080;
+  
+  // Calculate scale factor based on viewport size
+  // For very small screens (< 640px), scale down more aggressively
+  // For large screens (> 2560px), scale up slightly
+  let scaleFactor = 1;
+  
+  if (viewport.width < 640) {
+    // Mobile: scale based on width, minimum 0.6
+    scaleFactor = Math.max(0.6, viewport.width / baseWidth * 1.2);
+  } else if (viewport.width < 1024) {
+    // Tablet: moderate scaling
+    scaleFactor = Math.max(0.75, viewport.width / baseWidth * 1.1);
+  } else if (viewport.width < 1920) {
+    // Small desktop: slight scaling
+    scaleFactor = Math.max(0.85, viewport.width / baseWidth);
+  } else if (viewport.width > 2560) {
+    // Large desktop: scale up slightly
+    scaleFactor = Math.min(1.2, viewport.width / baseWidth * 0.9);
+  } else {
+    // Standard desktop (1920-2560): no scaling
+    scaleFactor = 1;
+  }
+  
+  // Apply scale factor to root element
+  const root = document.documentElement;
+  root.style.setProperty('--scale-base', scaleFactor);
+  
+  // Also apply transform scaling for very small screens if needed
+  if (viewport.width < 480) {
+    const bodyScale = Math.max(0.5, viewport.width / 480);
+    document.body.style.transform = `scale(${bodyScale})`;
+    document.body.style.transformOrigin = 'top left';
+    document.body.style.width = `${100 / bodyScale}%`;
+    document.body.style.height = `${100 / bodyScale}%`;
+  } else {
+    document.body.style.transform = '';
+    document.body.style.transformOrigin = '';
+    document.body.style.width = '';
+    document.body.style.height = '';
+  }
+  
+  console.log(`Responsive scaling applied: ${scaleFactor.toFixed(2)}x for ${viewport.width}x${viewport.height}`);
+}
+
+// Apply scaling on load and resize
+window.addEventListener('resize', () => {
+  clearTimeout(window.scaleTimeout);
+  window.scaleTimeout = setTimeout(applyResponsiveScaling, 100);
+});
+
 // Test if script is executing before DOM is ready
 console.log("Script executing, document.readyState:", document.readyState);
+
+// Apply scaling immediately if DOM is already ready
+if (document.readyState !== "loading") {
+  applyResponsiveScaling();
+}
 
 // Also try immediate execution test
 if (document.readyState === "loading") {
@@ -5590,6 +5932,9 @@ if (document.readyState === "loading") {
 
 window.addEventListener("DOMContentLoaded", async () => {
   console.log("=== DOMContentLoaded: Starting initialization ===");
+  
+  // Apply responsive scaling immediately
+  applyResponsiveScaling();
   console.log("Document ready, URL:", window.location.href);
   try {
     console.log("DOMContentLoaded: Step 1 - Rendering effect catalog");

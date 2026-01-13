@@ -4,12 +4,15 @@
 static const char* TAG = "led-audio";
 static AudioDiagnostics g_diag{};
 static AudioMetrics g_metrics{};
+static bool g_audio_force_disabled = false;  // Allow manual disable even if source is configured
 
 esp_err_t led_audio_apply_config(const AudioConfig& cfg) {
   g_diag.source = cfg.source;
   g_diag.sample_rate = cfg.sample_rate;
   g_diag.stereo = cfg.stereo;
-  g_diag.running = cfg.source != AudioSourceType::None &&
+  // Only set running if not manually disabled AND source is configured
+  g_diag.running = !g_audio_force_disabled &&
+                   cfg.source != AudioSourceType::None &&
                    (cfg.source != AudioSourceType::Snapcast || cfg.snapcast.enabled);
 
   ESP_LOGI(TAG,
@@ -68,6 +71,18 @@ float led_audio_get_custom_energy(float freq_min, float freq_max) {
     ++n;
   }
   return n > 0 ? std::min(1.5f, acc / static_cast<float>(n)) : 0.0f;
+}
+
+esp_err_t led_audio_set_running(bool running) {
+  g_audio_force_disabled = !running;
+  // Update running state: only true if not force-disabled AND source is configured
+  // Note: snapcast.enabled check is done in led_audio_apply_config, here we just respect the force flag
+  g_diag.running = !g_audio_force_disabled && g_diag.source != AudioSourceType::None;
+  ESP_LOGI(TAG, "Audio running state set to %s (force_disabled=%d, source=%d)", 
+           g_diag.running ? "true" : "false", 
+           g_audio_force_disabled ? 1 : 0,
+           static_cast<int>(g_diag.source));
+  return ESP_OK;
 }
 
 float led_audio_get_band_value(const std::string& band_name) {

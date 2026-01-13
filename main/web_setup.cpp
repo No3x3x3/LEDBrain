@@ -756,6 +756,40 @@ static esp_err_t api_led_state_post(httpd_req_t* req) {
   return ESP_OK;
 }
 
+static esp_err_t api_audio_state(httpd_req_t* req) {
+  auto body = read_body(req);
+  if (body.empty()) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty payload");
+  }
+  cJSON* root = cJSON_ParseWithLength(body.c_str(), body.size());
+  if (!root) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json");
+  }
+  bool enabled = true;
+  if (cJSON* en = cJSON_GetObjectItem(root, "enabled"); cJSON_IsBool(en)) {
+    enabled = cJSON_IsTrue(en);
+  }
+  cJSON_Delete(root);
+  
+  // Set audio running state independently from source configuration
+  const esp_err_t err = led_audio_set_running(enabled);
+  if (err != ESP_OK) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to set audio state");
+  }
+  
+  // Also stop/start snapclient if source is Snapcast
+  if (s_cfg && s_cfg->led_engine.audio.source == AudioSourceType::Snapcast) {
+    if (!enabled) {
+      snapclient_light_stop();
+    } else if (s_cfg->led_engine.audio.snapcast.enabled) {
+      snapclient_light_start(s_cfg->led_engine.audio.snapcast);
+    }
+  }
+  
+  httpd_resp_sendstr(req, "OK");
+  return ESP_OK;
+}
+
 static esp_err_t api_ota(httpd_req_t* req) {
   std::string url = kDefaultOtaUrl;
   auto body = read_body(req);
@@ -1103,6 +1137,8 @@ void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime, WledEffectsRunt
   httpd_register_uri_handler(server, &u_mqtt_test);
   httpd_uri_t u_mqtt_sync = { .uri="/api/mqtt/sync", .method=HTTP_POST, .handler=api_mqtt_sync, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_mqtt_sync);
+  httpd_uri_t u_audio_state = { .uri="/api/audio/state", .method=HTTP_POST, .handler=api_audio_state, .user_ctx=NULL };
+  httpd_register_uri_handler(server, &u_audio_state);
 
   ESP_LOGI(TAG,"Web server started");
 }

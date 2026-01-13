@@ -32,6 +32,8 @@ esp_err_t led_audio_apply_config(const AudioConfig& cfg);
 AudioDiagnostics led_audio_get_diagnostics();
 AudioMetrics led_audio_get_metrics();
 void led_audio_set_metrics(const AudioMetrics& metrics);
+// Control audio running state independently from source configuration
+esp_err_t led_audio_set_running(bool running);
 // Calculate energy from custom frequency range (Hz)
 // Returns energy from freq_min to freq_max, or 0.0f if range is invalid or spectrum not available
 float led_audio_get_custom_energy(float freq_min, float freq_max);// Get value for a specific frequency band or metric
