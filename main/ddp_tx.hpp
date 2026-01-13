@@ -25,3 +25,6 @@ bool ddp_send_frame_cached(const struct sockaddr_storage* addr,
                            uint8_t seq = 0);
 // Cache DNS resolution (returns true if cached, false if needs resolution)
 bool ddp_cache_resolve(const std::string& host, uint16_t port, struct sockaddr_storage* out_addr, socklen_t* out_addr_len);
+
+// Get network statistics (bytes sent via DDP)
+void ddp_get_stats(uint64_t* tx_bytes, uint64_t* rx_bytes);

@@ -929,9 +929,19 @@ details[open] .fx-section-header::before {
 .card-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 1rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.card-header > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-header > div:last-child {
+  flex-shrink: 0;
 }
 
 .inline-field {
@@ -1230,11 +1240,11 @@ details[open] .fx-section-header::before {
 .form-grid {
   display: grid;
   gap: 1.25rem;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: 1fr 1fr;
   align-items: start;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .form-grid {
     grid-template-columns: 1fr;
     gap: 1rem;
@@ -1293,6 +1303,32 @@ label.switch > span:first-of-type {
   height: 26px;
   flex-shrink: 0;
   order: -1; /* Switch comes before text */
+  background: rgba(255, 116, 116, 0.3);
+  border-radius: 999px;
+  transition: background 0.2s;
+  border: 1px solid rgba(255, 132, 132, 0.5);
+}
+
+label.switch > input:checked + span:first-of-type {
+  background: rgba(57, 255, 20, 0.35);
+  border-color: rgba(57, 255, 20, 0.7);
+}
+
+label.switch > span:first-of-type::before {
+  content: "";
+  position: absolute;
+  height: 20px;
+  width: 20px;
+  left: 4px;
+  bottom: 3px;
+  background: #ffffff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+label.switch > input:checked + span:first-of-type::before {
+  transform: translateX(20px);
 }
 
 /* Text content after the switch span */
@@ -1436,12 +1472,25 @@ button.primary.subtle {
 }
 
 button.primary.subtle[data-state="playing"] {
-  background: rgba(156, 230, 182, 0.15);
-  border-color: rgba(156, 230, 182, 0.5);
-  color: rgba(176, 238, 195, 0.9);
+  background: rgba(57, 255, 20, 0.2);
+  border-color: rgba(57, 255, 20, 0.6);
+  color: rgba(100, 255, 80, 0.95);
 }
 
 button.primary.subtle[data-state="stopped"] {
+  background: rgba(255, 116, 116, 0.15);
+  border-color: rgba(255, 132, 132, 0.5);
+  color: rgba(255, 150, 150, 0.9);
+}
+
+/* Device toggle buttons: play icon on green when playing (effects enabled), pause icon on red when stopped (effects disabled) */
+button.device-toggle[data-state="playing"] {
+  background: rgba(57, 255, 20, 0.2);
+  border-color: rgba(57, 255, 20, 0.6);
+  color: rgba(100, 255, 80, 0.95);
+}
+
+button.device-toggle[data-state="stopped"] {
   background: rgba(255, 116, 116, 0.15);
   border-color: rgba(255, 132, 132, 0.5);
   color: rgba(255, 150, 150, 0.9);
@@ -1640,6 +1689,11 @@ button.icon-refresh:hover svg {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  flex-shrink: 0;
+}
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 
 .panel-grid {
@@ -1665,9 +1719,10 @@ button.icon-refresh:hover svg {
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background: rgba(70, 90, 130, 0.4);
+  background: rgba(255, 116, 116, 0.3);
   border-radius: 999px;
   transition: background 0.2s;
+  border: 1px solid rgba(255, 132, 132, 0.5);
 }
 
 .switch span::before {
@@ -1677,13 +1732,15 @@ button.icon-refresh:hover svg {
   width: 20px;
   left: 4px;
   bottom: 3px;
-  background: var(--text);
+  background: #ffffff;
   border-radius: 50%;
   transition: transform 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .switch input:checked + span {
-  background: var(--accent);
+  background: rgba(57, 255, 20, 0.35);
+  border-color: rgba(57, 255, 20, 0.7);
 }
 
 .switch input:checked + span::before {

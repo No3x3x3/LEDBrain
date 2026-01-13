@@ -18,6 +18,7 @@
 #include "snapclient_light.hpp"
 #include "wifi_c6_ctrl.hpp"
 #include "wifi_c6.hpp"
+#include "ddp_tx.hpp"
 #include "esp_wifi_types.h"
 #include "esp_netif.h"
 #include "lwip/netif.h"
@@ -333,8 +334,7 @@ static esp_err_t api_info(httpd_req_t* req){
   cJSON_AddBoolToObject(root,"wifi_sta_connected", wifi_connected);
   
   // Network traffic statistics
-  // Note: lwip netif stats may not be directly accessible in ESP-IDF 5.5
-  // For now, return placeholder values - can be enhanced with custom tracking
+  // Get DDP TX statistics
   static uint64_t last_stats_time_us = 0;
   static uint64_t last_tx_bytes = 0;
   static uint64_t last_rx_bytes = 0;
@@ -342,20 +342,27 @@ static esp_err_t api_info(httpd_req_t* req){
   double tx_rate = 0.0;
   double rx_rate = 0.0;
   
-  // Try to get stats via esp_netif_net_stack API if available
-  // For now, use placeholder - proper implementation would require
-  // tracking bytes sent/received at driver level or using SNMP MIB2 if enabled
-  if (netif && last_stats_time_us > 0) {
+  uint64_t current_tx_bytes = 0;
+  uint64_t current_rx_bytes = 0;
+  ddp_get_stats(&current_tx_bytes, &current_rx_bytes);
+  
+  if (last_stats_time_us > 0) {
     uint64_t time_delta_us = current_time_us - last_stats_time_us;
     if (time_delta_us > 0 && time_delta_us < 10'000'000ULL) {  // Only if less than 10 seconds
-      // Placeholder: would need actual byte counters from driver
-      // For now, return 0 - can be enhanced with custom tracking
-      tx_rate = 0.0;
-      rx_rate = 0.0;
+      // Calculate rate in bytes per second
+      double time_delta_s = static_cast<double>(time_delta_us) / 1'000'000.0;
+      if (time_delta_s > 0) {
+        uint64_t tx_delta = current_tx_bytes - last_tx_bytes;
+        uint64_t rx_delta = current_rx_bytes - last_rx_bytes;
+        tx_rate = static_cast<double>(tx_delta) / time_delta_s;
+        rx_rate = static_cast<double>(rx_delta) / time_delta_s;
+      }
     }
   }
   
   last_stats_time_us = current_time_us;
+  last_tx_bytes = current_tx_bytes;
+  last_rx_bytes = current_rx_bytes;
   
   cJSON_AddNumberToObject(root, "network_tx_rate", tx_rate);
   cJSON_AddNumberToObject(root, "network_rx_rate", rx_rate);

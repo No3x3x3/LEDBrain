@@ -11,6 +11,10 @@
 
 static const char* TAG = "ddp";
 
+// Network statistics tracking
+static uint64_t s_tx_bytes = 0;
+static uint64_t s_rx_bytes = 0;  // For future use (audio receive)
+
 #pragma pack(push, 1)
 struct DDPHeader {
     uint8_t flags;       // 0x41 = push + ver
@@ -58,6 +62,11 @@ bool ddp_send_frame_internal(const struct sockaddr* addr,
         ESP_LOGE(TAG, "DDP send error");
         close(sock);
         return false;
+    }
+
+    // Track bytes sent
+    if (sent > 0) {
+        s_tx_bytes += static_cast<uint64_t>(sent);
     }
 
     close(sock);
@@ -126,6 +135,11 @@ bool ddp_cache_resolve(const std::string& host, uint16_t port, struct sockaddr_s
     
     freeaddrinfo(res);
     return false;
+}
+
+void ddp_get_stats(uint64_t* tx_bytes, uint64_t* rx_bytes) {
+    if (tx_bytes) *tx_bytes = s_tx_bytes;
+    if (rx_bytes) *rx_bytes = s_rx_bytes;
 }
 
 // ------------------------------------------------------------

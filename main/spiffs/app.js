@@ -30,6 +30,11 @@ const state = {
     physical: {}, // segment_id -> enabled state
     virtual: {}, // segment_id -> enabled state
   },
+  // Store global state before toggleAll disable
+  globalStateBeforeDisable: {
+    effectsEnabled: false,
+    audioEnabled: false,
+  },
 };
 
 const T = {};
@@ -676,7 +681,8 @@ function startUptimeTicker() {
 function updateControlButtons() {
   const effectsEnabled = state.ledState && state.ledState.enabled;
   const audioEnabled = state.info?.led_engine?.audio?.running ?? false;
-  const allEnabled = effectsEnabled && audioEnabled;
+  // All is enabled if anything is running (OR, not AND)
+  const allEnabled = effectsEnabled || audioEnabled;
   
   const btnAll = qs("btnToggleAll");
   if (btnAll) {
@@ -742,12 +748,19 @@ async function applyBrightness(value) {
 async function toggleAll() {
   const effectsEnabled = state.ledState && state.ledState.enabled;
   const audioEnabled = state.info?.led_engine?.audio?.running ?? false;
-  const allEnabled = effectsEnabled && audioEnabled;
+  const allEnabled = effectsEnabled || audioEnabled; // OR instead of AND - if anything is running, consider it enabled
   const next = !allEnabled;
   
   const btn = qs("btnToggleAll");
   if (btn) btn.disabled = true;
   try {
+    // If disabling, save current global state (effects + audio) and device states
+    if (!next) {
+      state.globalStateBeforeDisable.effectsEnabled = effectsEnabled;
+      state.globalStateBeforeDisable.audioEnabled = audioEnabled;
+      saveDeviceStates();
+    }
+    
     // Toggle both effects and audio
     await Promise.all([
       fetch("/api/led/state", {
@@ -761,12 +774,47 @@ async function toggleAll() {
         body: JSON.stringify({ enabled: next }),
       })
     ]);
-    state.ledState = state.ledState || {};
-    state.ledState.enabled = next;
+    
+    // If enabling, restore previous state
+    if (next) {
+      const saved = state.globalStateBeforeDisable;
+      // Restore effects if they were enabled before
+      if (saved.effectsEnabled) {
+        await fetch("/api/led/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: true }),
+        });
+        state.ledState = state.ledState || {};
+        state.ledState.enabled = true;
+      }
+      // Restore audio if it was enabled before
+      if (saved.audioEnabled) {
+        await fetch("/api/audio/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: true }),
+        });
+      }
+      // Restore device states
+      await restoreDeviceStates();
+    } else {
+      // Disabling - update state
+      state.ledState = state.ledState || {};
+      state.ledState.enabled = false;
+    }
+    
     if (state.info && state.info.led_engine) {
-      state.info.led_engine.enabled = next;
-      if (state.info.led_engine.audio) {
-        state.info.led_engine.audio.running = next;
+      if (next) {
+        state.info.led_engine.enabled = state.globalStateBeforeDisable.effectsEnabled;
+        if (state.info.led_engine.audio) {
+          state.info.led_engine.audio.running = state.globalStateBeforeDisable.audioEnabled;
+        }
+      } else {
+        state.info.led_engine.enabled = false;
+        if (state.info.led_engine.audio) {
+          state.info.led_engine.audio.running = false;
+        }
       }
       updateOverview();
     }
@@ -1468,8 +1516,17 @@ function renderDevicePreview() {
     actions.className = "preview-device-actions";
     
     const toggleBtn = document.createElement("button");
-    toggleBtn.className = "preview-device-toggle ghost small";
-    toggleBtn.textContent = device.enabled ? "Disable" : "Enable";
+    toggleBtn.className = "preview-device-toggle primary subtle icon-only device-toggle";
+    toggleBtn.dataset.state = device.enabled ? "playing" : "stopped";
+    toggleBtn.setAttribute("aria-label", device.enabled ? "Stop Effect" : "Start Effect");
+    const playIconStyle = device.enabled ? '' : 'style="display: none;"';
+    const pauseIconStyle = device.enabled ? 'style="display: none;"' : '';
+    toggleBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width: 20px; height: 20px;">
+        <path d="M8 5v14l11-7z" class="icon-play" ${playIconStyle}/>
+        <path d="M6 6h4v12H6zm8 0h4v12h-4z" class="icon-pause" ${pauseIconStyle}/>
+      </svg>
+    `;
     toggleBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       // Toggle device enabled state
@@ -1479,6 +1536,12 @@ function renderDevicePreview() {
         if (binding) {
           binding.enabled = !binding.enabled;
           await saveWledEffects();
+          // Update button state and icons
+          toggleBtn.dataset.state = binding.enabled ? "playing" : "stopped";
+          const playIcon = toggleBtn.querySelector(".icon-play");
+          const pauseIcon = toggleBtn.querySelector(".icon-pause");
+          if (playIcon) playIcon.style.display = binding.enabled ? "" : "none";
+          if (pauseIcon) pauseIcon.style.display = binding.enabled ? "none" : "";
           renderDevicePreview();
         }
       } else if (device.type === "physical") {
@@ -1489,8 +1552,13 @@ function renderDevicePreview() {
           if (seg) {
             seg.enabled = !seg.enabled;
             await saveLedConfig();
+            // Update button state and icons
+            toggleBtn.dataset.state = seg.enabled ? "playing" : "stopped";
+            const playIcon = toggleBtn.querySelector(".icon-play");
+            const pauseIcon = toggleBtn.querySelector(".icon-pause");
+            if (playIcon) playIcon.style.display = seg.enabled ? "" : "none";
+            if (pauseIcon) pauseIcon.style.display = seg.enabled ? "none" : "";
             renderDevicePreview();
-            notify(seg.enabled ? "Segment enabled" : "Segment disabled", "ok");
           }
         }
       } else if (device.type === "virtual") {
@@ -1500,8 +1568,13 @@ function renderDevicePreview() {
         if (seg) {
           seg.enabled = seg.enabled === false ? true : false;
           await saveLedConfig();
+          // Update button state and icons
+          toggleBtn.dataset.state = seg.enabled !== false ? "playing" : "stopped";
+          const playIcon = toggleBtn.querySelector(".icon-play");
+          const pauseIcon = toggleBtn.querySelector(".icon-pause");
+          if (playIcon) playIcon.style.display = seg.enabled !== false ? "" : "none";
+          if (pauseIcon) pauseIcon.style.display = seg.enabled !== false ? "none" : "";
           renderDevicePreview();
-          notify(seg.enabled !== false ? "Virtual segment enabled" : "Virtual segment disabled", "ok");
         }
       }
     });
@@ -1754,10 +1827,10 @@ function renderWledDetail(dev) {
     </div>
     <div id="wledEffectForm"></div>
     <div class="actions" style="display: flex; gap: 0.5rem; align-items: center;">
-      <button class="primary subtle icon-only" id="btnWledToggle" data-state="${binding.enabled !== false ? "playing" : "stopped"}" title="" aria-label="Start/Stop Effect">
+      <button class="primary subtle icon-only device-toggle" id="btnWledToggle" data-state="${binding.enabled !== false ? "playing" : "stopped"}" title="" aria-label="Start/Stop Effect">
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width: 20px; height: 20px;">
-          <path d="M8 5v14l11-7z" class="icon-play"/>
-          <path d="M6 6h4v12H6zm8 0h4v12h-4z" class="icon-pause"/>
+          <path d="M8 5v14l11-7z" class="icon-play" ${binding.enabled === false ? 'style="display: none;"' : ''}/>
+          <path d="M6 6h4v12H6zm8 0h4v12h-4z" class="icon-pause" ${binding.enabled === false ? '' : 'style="display: none;"'}/>
         </svg>
       </button>
       <button class="primary" id="btnSaveWledFx">${t("btn_save_led") || "Save"}</button>
@@ -1767,7 +1840,8 @@ function renderWledDetail(dev) {
   const formContainer = qs("wledEffectForm");
   const fakeSegment = { name: dev.name || dev.id || "WLED", led_count: dev.leds || 0, audio: defaultSegmentAudio() };
   if (formContainer) {
-    renderEffectDetailForm(formContainer, fakeSegment, binding.effect, true);  // true = isWled
+    // Pass binding as additional context for effect change handler
+    renderEffectDetailForm(formContainer, fakeSegment, binding.effect, true, binding);  // true = isWled, binding for context
   }
 
   const fpsInput = qs("wledFxFps");
@@ -1784,10 +1858,14 @@ function renderWledDetail(dev) {
   });
   qs("wledFxEnabled")?.addEventListener("change", (ev) => {
     binding.enabled = ev.target.checked;
-    // Update toggle button state
+    // Update toggle button state and icons
     const toggleBtn = qs("btnWledToggle");
     if (toggleBtn) {
       toggleBtn.dataset.state = binding.enabled ? "playing" : "stopped";
+      const playIcon = toggleBtn.querySelector(".icon-play");
+      const pauseIcon = toggleBtn.querySelector(".icon-pause");
+      if (playIcon) playIcon.style.display = binding.enabled ? "" : "none";
+      if (pauseIcon) pauseIcon.style.display = binding.enabled ? "none" : "";
     }
     // Auto-save when enabled is toggled
     saveWledEffects();
@@ -1805,6 +1883,10 @@ function renderWledDetail(dev) {
     const toggleBtn = qs("btnWledToggle");
     if (toggleBtn) {
       toggleBtn.dataset.state = binding.enabled ? "playing" : "stopped";
+      const playIcon = toggleBtn.querySelector(".icon-play");
+      const pauseIcon = toggleBtn.querySelector(".icon-pause");
+      if (playIcon) playIcon.style.display = binding.enabled ? "" : "none";
+      if (pauseIcon) pauseIcon.style.display = binding.enabled ? "none" : "";
     }
     // Save configuration first
     await saveWledEffects();
@@ -1859,7 +1941,7 @@ function renderWledDetail(dev) {
   });
 }
 
-function renderEffectDetailForm(target, segment, assignment, isWled = false) {
+function renderEffectDetailForm(target, segment, assignment, isWled = false, wledBinding = null, virtualSegment = null) {
   if (!target) return;
   const saveFn = isWled ? saveWledEffects : autoSaveLedConfig;
   // Replace all autoSaveLedConfig() calls with saveFn() in this function scope
@@ -2267,9 +2349,35 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false) {
     if (desc && meta) {
       desc.textContent = meta.desc || "";
     }
-    // For WLED devices, ensure effect is applied immediately
-    if (isWled) {
+    // For WLED devices, enable the device and ensure effect is applied immediately
+    if (isWled && assignment.effect && wledBinding) {
+      // Enable the device when effect is selected
+      wledBinding.enabled = true;
+      // Update UI toggle button
+      const toggleBtn = qs("btnWledToggle");
+      if (toggleBtn) {
+        toggleBtn.dataset.state = "playing";
+        const playIcon = toggleBtn.querySelector(".icon-play");
+        const pauseIcon = toggleBtn.querySelector(".icon-pause");
+        if (playIcon) playIcon.style.display = "";
+        if (pauseIcon) pauseIcon.style.display = "none";
+      }
+      // Update enabled checkbox
+      const enabledCheckbox = qs("wledFxEnabled");
+      if (enabledCheckbox) {
+        enabledCheckbox.checked = true;
+      }
       await saveFn();
+    } else if (!isWled && assignment.effect) {
+      // For physical/virtual segments, enable the segment when effect is selected
+      if (virtualSegment) {
+        // Virtual segment
+        virtualSegment.enabled = true;
+      } else if (segment) {
+        // Physical segment
+        segment.enabled = true;
+      }
+      saveFn();
     } else {
       saveFn();
     }
@@ -2666,8 +2774,8 @@ function renderDeviceDetail(entry) {
     card.style.display = "block";
     const seg = entry.meta;
     seg.effect = seg.effect || { effect: "Solid", brightness: 255, intensity: 128, speed: 128, audio_profile: "default", engine: "ledfx" };
-    const fakeSegment = { name: seg.name, led_count: seg.members?.length || 0, audio: defaultSegmentAudio() };
-    renderEffectDetailForm(detail, fakeSegment, seg.effect, false);
+    const fakeSegment = { name: seg.name, led_count: seg.members?.length || 0, audio: defaultSegmentAudio(), enabled: seg.enabled !== false };
+    renderEffectDetailForm(detail, fakeSegment, seg.effect, false, null, seg);  // Pass seg as virtual segment context
   } else {
     const detail = qs("segmentDeviceDetailBody");
     const card = qs("segmentDeviceDetailCard");
