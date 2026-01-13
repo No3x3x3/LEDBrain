@@ -1139,10 +1139,11 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
       }
     }
     if (frame_empty && frame_idx % 300 == 0) {
+      const float intensity_val = binding.effect.intensity / 255.0f;
       ESP_LOGW(TAG, "Rendered frame is empty (all zeros) for effect '%s' on device %s (brightness=%.2f, intensity=%.2f)",
                binding.effect.effect.c_str(), device.id.c_str(), 
                binding.effect.brightness_override > 0 ? binding.effect.brightness_override / 255.0f : binding.effect.brightness / 255.0f,
-               intensity);
+               intensity_val);
     }
     
     // Only cache if cache is not too large (limit to 10 entries to avoid memory issues)
