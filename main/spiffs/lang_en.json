@@ -311,6 +311,8 @@
   "fx_audio_custom_range": "Or use custom frequency range below",
   "fx_audio_use_reactive": "0 = use reactive mode above",
   "wled_empty_hint": "Scan or add WLED devices to link effects",
+  "preview_title": "Device Preview",
+  "preview_subtitle": "Live preview of effects on all devices. Click a device to configure.",
   "device_browser_title": "Devices & outputs",
   "device_browser_subtitle": "Pick a WLED controller or local segment to tweak effects.",
   "device_detail_title": "Device detail",

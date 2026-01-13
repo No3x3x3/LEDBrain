@@ -36,6 +36,7 @@ struct LedSegmentConfig {
   std::string id{"segment-1"};
   std::string name{"Segment"};
   uint16_t start_index{0};
+  uint16_t stop_index{0};  // Exclusive end index (0 = use led_count)
   uint16_t led_count{120};
   uint16_t render_order{0};
   int gpio{-1};
@@ -46,6 +47,10 @@ struct LedSegmentConfig {
   bool enabled{true};
   bool reverse{false};
   bool mirror{false};
+  uint16_t grouping{1};  // LEDs per group (GP)
+  uint16_t spacing{0};   // LEDs to skip between groups (SP)
+  uint8_t segment_brightness{255};  // Segment brightness 0-255 (SB)
+  bool main_segment{false};  // Main segment flag (SM)
   bool matrix_enabled{false};
   LedMatrixConfig matrix{};
   uint16_t power_limit_ma{0};
