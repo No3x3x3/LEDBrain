@@ -16,6 +16,20 @@ if (-not (Test-Path $BUILD_DIR)) {
 $env:BUILD_DIR_BASE = $BUILD_DIR
 Write-Host "Używam katalogu build: $BUILD_DIR" -ForegroundColor Cyan
 
+# Fix sdkconfig for OTA partitions before build/flash
+$shouldFix = $false
+foreach ($arg in $args) {
+    if ($arg -eq "build" -or $arg -eq "flash" -or $arg -eq "all") {
+        $shouldFix = $true
+        break
+    }
+}
+
+if ($shouldFix -and (Test-Path "fix_sdkconfig.ps1")) {
+    Write-Host "Sprawdzam konfigurację partycji..." -ForegroundColor Cyan
+    & .\fix_sdkconfig.ps1
+}
+
 # Pass all arguments to idf.py
 & idf.py @args
 

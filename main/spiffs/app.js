@@ -1,4 +1,4 @@
-﻿// Simple test to verify JavaScript is executing
+// Simple test to verify JavaScript is executing
 console.log("=== LEDBrain app.js loaded ===");
 if (typeof document === "undefined") {
   console.error("FATAL: document is undefined!");
@@ -24,6 +24,12 @@ const state = {
   loadingWled: false,
   fxFormAccordionState: { advanced: false, audioAdvanced: false },
   saveLedConfigTimer: null,
+  // Store device states before global disable
+  deviceStatesBeforeDisable: {
+    wled: {}, // device_id -> enabled state
+    physical: {}, // segment_id -> enabled state
+    virtual: {}, // segment_id -> enabled state
+  },
 };
 
 const T = {};
@@ -275,17 +281,8 @@ function t(key) {
 }
 
 function notify(message, variant = "ok") {
-  const bar = qs("statusBar");
-  if (!bar) return;
-  bar.textContent = message;
-  bar.classList.remove("hidden", "ok", "error");
-  if (variant) {
-    bar.classList.add(variant);
-  }
-  clearTimeout(state.notifyTimer);
-  state.notifyTimer = setTimeout(() => {
-    bar.classList.add("hidden");
-  }, 3200);
+  // Notifications disabled - function does nothing
+  return;
 }
 
 async function loadLang(lang) {
@@ -683,21 +680,18 @@ function updateControlButtons() {
   
   const btnAll = qs("btnToggleAll");
   if (btnAll) {
-    btnAll.textContent = allEnabled ? "Stop All" : "Start All";
     btnAll.dataset.state = allEnabled ? "playing" : "stopped";
     btnAll.disabled = false;
   }
   
   const btnEffects = qs("btnToggleEffects");
   if (btnEffects) {
-    btnEffects.textContent = effectsEnabled ? "Stop Effects" : "Start Effects";
     btnEffects.dataset.state = effectsEnabled ? "playing" : "stopped";
     btnEffects.disabled = false;
   }
   
   const btnAudio = qs("btnToggleAudio");
   if (btnAudio) {
-    btnAudio.textContent = audioEnabled ? "Stop Audio" : "Start Audio";
     btnAudio.dataset.state = audioEnabled ? "playing" : "stopped";
     btnAudio.disabled = false;
   }
@@ -777,7 +771,6 @@ async function toggleAll() {
       updateOverview();
     }
     updateControlButtons();
-    notify(next ? "All started" : "All stopped", "ok");
   } catch (err) {
     console.error(err);
     notify(t("toast_save_failed"), "error");
@@ -786,11 +779,101 @@ async function toggleAll() {
   }
 }
 
+// Save device states before global disable
+function saveDeviceStates() {
+  const saved = state.deviceStatesBeforeDisable;
+  
+  // Save WLED device states
+  const fx = ensureWledEffectsConfig();
+  saved.wled = {};
+  fx.bindings.forEach(binding => {
+    const deviceId = binding.device_id;
+    if (deviceId) {
+      saved.wled[deviceId] = binding.enabled !== false;
+    }
+  });
+  
+  // Save physical segment states
+  const led = ensureLedEngineConfig();
+  saved.physical = {};
+  (led.segments || []).forEach(seg => {
+    const segId = seg.id || seg.segment_id;
+    if (segId) {
+      saved.physical[segId] = seg.enabled !== false;
+    }
+  });
+  
+  // Save virtual segment states
+  ensureVirtualSegments();
+  saved.virtual = {};
+  (state.config.virtual_segments || []).forEach(seg => {
+    const segId = seg.id || seg.name;
+    if (segId) {
+      saved.virtual[segId] = seg.enabled !== false;
+    }
+  });
+}
+
+// Restore device states after global enable
+async function restoreDeviceStates() {
+  const saved = state.deviceStatesBeforeDisable;
+  let needsSave = false;
+  
+  // Restore WLED device states
+  const fx = ensureWledEffectsConfig();
+  fx.bindings.forEach(binding => {
+    const deviceId = binding.device_id;
+    if (deviceId && saved.wled.hasOwnProperty(deviceId)) {
+      const wasEnabled = saved.wled[deviceId];
+      if (wasEnabled) {
+        binding.enabled = true;
+        needsSave = true;
+      }
+    }
+  });
+  
+  // Restore physical segment states
+  const led = ensureLedEngineConfig();
+  (led.segments || []).forEach(seg => {
+    const segId = seg.id || seg.segment_id;
+    if (segId && saved.physical.hasOwnProperty(segId)) {
+      const wasEnabled = saved.physical[segId];
+      if (wasEnabled) {
+        seg.enabled = true;
+        needsSave = true;
+      }
+    }
+  });
+  
+  // Restore virtual segment states
+  ensureVirtualSegments();
+  (state.config.virtual_segments || []).forEach(seg => {
+    const segId = seg.id || seg.name;
+    if (segId && saved.virtual.hasOwnProperty(segId)) {
+      const wasEnabled = saved.virtual[segId];
+      if (wasEnabled) {
+        seg.enabled = true;
+        needsSave = true;
+      }
+    }
+  });
+  
+  // Save if any changes were made (saveLedConfig already saves wled_effects)
+  if (needsSave) {
+    await saveLedConfig();
+  }
+}
+
 async function toggleEffects() {
   const next = !(state.ledState && state.ledState.enabled);
   const btn = qs("btnToggleEffects");
   if (btn) btn.disabled = true;
   try {
+    // If disabling, save current device states
+    if (!next) {
+      saveDeviceStates();
+    }
+    
     await fetch("/api/led/state", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -798,12 +881,17 @@ async function toggleEffects() {
     });
     state.ledState = state.ledState || {};
     state.ledState.enabled = next;
+    
+    // If enabling, restore device states
+    if (next) {
+      await restoreDeviceStates();
+    }
+    
     if (state.info && state.info.led_engine) {
       state.info.led_engine.enabled = next;
       updateOverview();
     }
     updateControlButtons();
-    notify(next ? t("toast_led_started") : t("toast_led_stopped"), "ok");
   } catch (err) {
     console.error(err);
     notify(t("toast_save_failed"), "error");
@@ -828,7 +916,6 @@ async function toggleAudio() {
       updateOverview();
     }
     updateControlButtons();
-    notify(next ? "Audio started" : "Audio stopped", "ok");
   } catch (err) {
     console.error(err);
     notify(t("toast_save_failed"), "error");
@@ -1393,7 +1480,6 @@ function renderDevicePreview() {
           binding.enabled = !binding.enabled;
           await saveWledEffects();
           renderDevicePreview();
-          notify(binding.enabled ? "Device enabled" : "Device disabled", "ok");
         }
       } else if (device.type === "physical") {
         // Toggle physical segment
@@ -1667,7 +1753,13 @@ function renderWledDetail(dev) {
       4. Device must be in DDP receive mode (not running local effects)</small>
     </div>
     <div id="wledEffectForm"></div>
-    <div class="actions">
+    <div class="actions" style="display: flex; gap: 0.5rem; align-items: center;">
+      <button class="primary subtle icon-only" id="btnWledToggle" data-state="${binding.enabled !== false ? "playing" : "stopped"}" title="" aria-label="Start/Stop Effect">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width: 20px; height: 20px;">
+          <path d="M8 5v14l11-7z" class="icon-play"/>
+          <path d="M6 6h4v12H6zm8 0h4v12h-4z" class="icon-pause"/>
+        </svg>
+      </button>
       <button class="primary" id="btnSaveWledFx">${t("btn_save_led") || "Save"}</button>
     </div>
   `;
@@ -1692,8 +1784,66 @@ function renderWledDetail(dev) {
   });
   qs("wledFxEnabled")?.addEventListener("change", (ev) => {
     binding.enabled = ev.target.checked;
+    // Update toggle button state
+    const toggleBtn = qs("btnWledToggle");
+    if (toggleBtn) {
+      toggleBtn.dataset.state = binding.enabled ? "playing" : "stopped";
+    }
     // Auto-save when enabled is toggled
     saveWledEffects();
+  });
+  
+  // Toggle button for play/pause
+  qs("btnWledToggle")?.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    const wasEnabled = binding.enabled !== false;
+    binding.enabled = !wasEnabled;
+    const enabledCheckbox = qs("wledFxEnabled");
+    if (enabledCheckbox) {
+      enabledCheckbox.checked = binding.enabled;
+    }
+    const toggleBtn = qs("btnWledToggle");
+    if (toggleBtn) {
+      toggleBtn.dataset.state = binding.enabled ? "playing" : "stopped";
+    }
+    // Save configuration first
+    await saveWledEffects();
+    
+    // If disabling, send command to WLED to stop DDP and return to local effects
+    if (!binding.enabled && dev.address) {
+      try {
+        // Send HTTP command to WLED to:
+        // 1. Turn on (T=1) - ensure device is on
+        // 2. Disable DDP receive mode by setting a local effect
+        // 3. Set brightness to previous level or default
+        const address = dev.address || dev.ip;
+        if (address) {
+          // First, get current state to preserve brightness
+          let brightness = 255;
+          try {
+            const stateRes = await fetch(`http://${address}/json/state`, { method: "GET", timeout: 2000 });
+            if (stateRes.ok) {
+              const state = await stateRes.json();
+              brightness = state.bri || 255;
+            }
+          } catch (err) {
+            console.warn("Could not fetch WLED state:", err);
+          }
+          // Turn on and set a simple local effect (Solid color)
+          await fetch(`http://${address}/win&T=1&FX=0&R=255&G=0&B=0&BR=${brightness}`, { method: "GET", timeout: 2000 });
+        }
+      } catch (err) {
+        console.warn("Failed to send stop command to WLED:", err);
+      }
+    } else if (binding.enabled) {
+      // If enabling, ensure DDP is enabled
+      binding.ddp = true;
+      const ddpCheckbox = qs("wledFxDdp");
+      if (ddpCheckbox) {
+        ddpCheckbox.checked = true;
+      }
+      await saveWledEffects();
+    }
   });
   qs("wledFxDdp")?.addEventListener("change", (ev) => {
     binding.ddp = ev.target.checked;
@@ -2109,7 +2259,7 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false) {
     }
     saveFn();
   });
-  qs("devFxEffect")?.addEventListener("change", (ev) => {
+  qs("devFxEffect")?.addEventListener("change", async (ev) => {
     assignment.effect = ev.target.value || "";
     // Update description
     const meta = findEffectMeta(assignment.effect);
@@ -2117,7 +2267,12 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false) {
     if (desc && meta) {
       desc.textContent = meta.desc || "";
     }
-    saveFn();
+    // For WLED devices, ensure effect is applied immediately
+    if (isWled) {
+      await saveFn();
+    } else {
+      saveFn();
+    }
   });
   qs("devFxPreset")?.addEventListener("change", (ev) => {
     assignment.preset = ev.target.value || "";
@@ -2675,17 +2830,19 @@ function updateNetworkStatus(info) {
   const trafficTx = qs("trafficTx");
   const trafficRx = qs("trafficRx");
   if (trafficTx) {
-    if (info.network_tx_rate !== undefined) {
-      const txRate = formatTrafficRate(info.network_tx_rate);
-      trafficTx.textContent = txRate;
+    // Try multiple possible field names for TX rate
+    const txRate = info.network_tx_rate ?? info.tx_rate ?? info.tx_bytes_per_sec ?? info.udp_tx_rate ?? 0;
+    if (txRate > 0) {
+      trafficTx.textContent = formatTrafficRate(txRate);
     } else {
       trafficTx.textContent = "0 KB/s";
     }
   }
   if (trafficRx) {
-    if (info.network_rx_rate !== undefined) {
-      const rxRate = formatTrafficRate(info.network_rx_rate);
-      trafficRx.textContent = rxRate;
+    // Try multiple possible field names for RX rate
+    const rxRate = info.network_rx_rate ?? info.rx_rate ?? info.rx_bytes_per_sec ?? info.udp_rx_rate ?? 0;
+    if (rxRate > 0) {
+      trafficRx.textContent = formatTrafficRate(rxRate);
     } else {
       trafficRx.textContent = "0 KB/s";
     }
@@ -3743,6 +3900,8 @@ function handleVirtualListInput(event) {
   }
   if (event.target.classList.contains("virtual-enabled")) {
     seg.enabled = event.target.checked;
+    // Re-render to update checkbox visual state
+    renderVirtualSegments();
     return;
   }
   if (event.target.classList.contains("virtual-member-target")) {
@@ -4175,6 +4334,10 @@ function handleSegmentInput(event) {
     // Re-render to show/hide matrix options
     renderSegmentTable(led);
   }
+  if (field === "enabled") {
+    // Re-render to update checkbox visual state
+    renderSegmentTable(led);
+  }
   // Re-render power estimate when LED count or power limit changes
   if (field === "led_count" || field === "power_limit_ma") {
     renderSegmentTable(led);
@@ -4312,6 +4475,32 @@ async function saveLedConfig() {
     });
     notify(t("toast_led_saved"), "ok");
     refreshInfo();
+    // Auto-start effects if they are configured and not already running
+    const hasEffects = (led.segments && led.segments.length > 0) || 
+                       (state.config.virtual_segments && state.config.virtual_segments.length > 0) ||
+                       (state.config.wled_effects && state.config.wled_effects.bindings && state.config.wled_effects.bindings.length > 0);
+    if (hasEffects && !state.ledState?.enabled) {
+      // Check if any segment has an effect assigned
+      const hasAssignedEffects = led.segments.some(seg => {
+        const assign = ensureEffectAssignment(seg.id);
+        return assign && assign.effect && assign.effect.trim() !== "";
+      });
+      if (hasAssignedEffects) {
+        // Auto-start effects
+        await fetch("/api/led/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: true }),
+        });
+        state.ledState = state.ledState || {};
+        state.ledState.enabled = true;
+        if (state.info && state.info.led_engine) {
+          state.info.led_engine.enabled = true;
+        }
+        updateControlButtons();
+        notify(t("toast_led_started"), "ok");
+      }
+    }
   } catch (err) {
     console.error(err);
     notify(t("toast_led_failed"), "error");
