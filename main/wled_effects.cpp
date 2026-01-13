@@ -1334,9 +1334,16 @@ void WledEffectsRuntime::task_loop() {
     // This is the central controller: generates effects (WLED or LEDFx, audio-reactive if enabled) and sends to WLED devices
     // Each WLED device can have its own effect assignment - effects react to music from Snapcast if audio_link=true
     if (fx.bindings.empty()) {
-      ESP_LOGD(TAG, "No WLED effect bindings configured");
+      if (frame_idx % 300 == 0) {  // Log every 5 seconds
+        ESP_LOGI(TAG, "No WLED effect bindings configured");
+      }
     } else if (devices_snapshot.empty()) {
-      ESP_LOGD(TAG, "No WLED devices configured (%zu bindings)", fx.bindings.size());
+      if (frame_idx % 300 == 0) {  // Log every 5 seconds
+        ESP_LOGI(TAG, "No WLED devices configured (%zu bindings)", fx.bindings.size());
+      }
+    } else if (frame_idx % 300 == 0) {  // Log every 5 seconds
+      ESP_LOGI(TAG, "WLED render loop: %zu bindings, %zu devices, is_running=%d", 
+               fx.bindings.size(), devices_snapshot.size(), is_running ? 1 : 0);
     }
     for (const auto& binding : fx.bindings) {
       // Resolve device first to get IP (needed for cleanup even if disabled)
@@ -1374,9 +1381,14 @@ void WledEffectsRuntime::task_loop() {
           }
         }
         if (!binding.enabled) {
-          ESP_LOGD(TAG, "Binding for device %s is disabled", binding.device_id.c_str());
+          if (frame_idx % 300 == 0) {  // Log every 5 seconds
+            ESP_LOGI(TAG, "Binding for device %s is disabled (enabled=%d, ddp=%d)", 
+                     binding.device_id.c_str(), binding.enabled ? 1 : 0, binding.ddp ? 1 : 0);
+          }
         } else if (!binding.ddp) {
-          ESP_LOGD(TAG, "Binding for device %s has DDP disabled", binding.device_id.c_str());
+          if (frame_idx % 300 == 0) {  // Log every 5 seconds
+            ESP_LOGI(TAG, "Binding for device %s has DDP disabled", binding.device_id.c_str());
+          }
         }
         continue;
       }
@@ -1398,7 +1410,12 @@ void WledEffectsRuntime::task_loop() {
         enable_wled_ddp_mode(ip);
       }
       const bool ok = render_and_send(binding, dev, ip, frame_idx, global_brightness, fps);
-      if (!ok && frame_idx % 60 == 0) {  // Log every 60 frames (~1 second at 60fps)
+      if (ok && frame_idx % 300 == 0) {  // Log success every 5 seconds
+        ESP_LOGI(TAG, "Successfully rendering effect '%s' to device %s (%s:%u, enabled=%d, ddp=%d)", 
+                 binding.effect.effect.c_str(), binding.device_id.c_str(), ip.c_str(), 
+                 cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : 4048,
+                 binding.enabled ? 1 : 0, binding.ddp ? 1 : 0);
+      } else if (!ok && frame_idx % 60 == 0) {  // Log failure every 60 frames (~1 second at 60fps)
         ESP_LOGW(TAG, "Failed to render/send effect '%s' to device %s (%s:%u)", 
                  binding.effect.effect.c_str(), binding.device_id.c_str(), ip.c_str(), 
                  cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : 4048);

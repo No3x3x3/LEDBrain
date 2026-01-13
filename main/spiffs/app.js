@@ -1705,6 +1705,8 @@ function renderDevicePreview() {
 
 let previewAnimationFrame = null;
 let previewFrameIndex = 0;
+let previewStartTime = null;
+const PREVIEW_FPS = 30; // Limit preview to 30 FPS for smoother animation
 
 function startPreviewAnimation() {
   if (previewAnimationFrame) {
@@ -1723,39 +1725,53 @@ function startPreviewAnimation() {
     return;
   }
   
-  console.log(`startPreviewAnimation: Starting animation for ${canvases.length} canvas(es)`);
+  console.log(`startPreviewAnimation: Starting animation for ${canvases.length} canvas(es) at ${PREVIEW_FPS} FPS`);
+  previewStartTime = performance.now();
+  previewFrameIndex = 0;
   
-  function animate() {
-    let renderedCount = 0;
-    canvases.forEach(canvas => {
-      const deviceId = canvas.dataset.deviceId;
-      const card = canvas.closest(".preview-device-card");
-      if (!card) return;
-      
-      const deviceType = card.dataset.deviceType;
-      const deviceData = getDeviceData(deviceId, deviceType);
-      
-      if (deviceData && deviceData.enabled !== false) {
-        renderPreviewFrame(canvas, deviceData, previewFrameIndex);
-        renderedCount++;
-      } else {
-        // Clear canvas if disabled
-        const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#0a0f18";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
-    });
+  function animate(currentTime) {
+    // Calculate frame index based on time (not requestAnimationFrame calls)
+    // This ensures consistent animation speed regardless of browser FPS
+    if (previewStartTime === null) {
+      previewStartTime = currentTime;
+    }
+    const elapsedSeconds = (currentTime - previewStartTime) / 1000;
+    const targetFrameIndex = Math.floor(elapsedSeconds * PREVIEW_FPS);
     
-    // Log every 5 seconds (at ~60fps, that's every 300 frames)
-    if (previewFrameIndex % 300 === 0 && renderedCount > 0) {
-      console.log(`Preview animation: rendering ${renderedCount} device(s), frame ${previewFrameIndex}`);
+    // Only update if we need a new frame (throttle to PREVIEW_FPS)
+    if (targetFrameIndex > previewFrameIndex) {
+      previewFrameIndex = targetFrameIndex;
+      
+      let renderedCount = 0;
+      canvases.forEach(canvas => {
+        const deviceId = canvas.dataset.deviceId;
+        const card = canvas.closest(".preview-device-card");
+        if (!card) return;
+        
+        const deviceType = card.dataset.deviceType;
+        const deviceData = getDeviceData(deviceId, deviceType);
+        
+        if (deviceData && deviceData.enabled !== false) {
+          renderPreviewFrame(canvas, deviceData, previewFrameIndex);
+          renderedCount++;
+        } else {
+          // Clear canvas if disabled
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#0a0f18";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+      });
+      
+      // Log every 5 seconds
+      if (previewFrameIndex % (PREVIEW_FPS * 5) === 0 && renderedCount > 0) {
+        console.log(`Preview animation: rendering ${renderedCount} device(s), frame ${previewFrameIndex} (${elapsedSeconds.toFixed(1)}s)`);
+      }
     }
     
-    previewFrameIndex++;
     previewAnimationFrame = requestAnimationFrame(animate);
   }
   
-  animate();
+  animate(performance.now());
 }
 
 function getDeviceData(deviceId, deviceType) {
