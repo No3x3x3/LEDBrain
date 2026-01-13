@@ -10,16 +10,238 @@
 #include "esp_timer.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
+#include "esp_http_client.h"
+#include "cJSON.h"
 #include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <cstring>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
 constexpr uint16_t kDefaultDdpPort = 4048;
 static const char* TAG = "wled_fx";
+
+// Cache to track which devices have DDP mode enabled (to avoid spamming API)
+static std::unordered_map<std::string, uint64_t> ddp_mode_enabled_cache;
+// Cache to store WLED state before enabling DDP mode (to restore later)
+static std::unordered_map<std::string, std::string> wled_state_cache;
+
+std::string get_wled_state(const std::string& ip) {
+  if (ip.empty()) {
+    return "";
+  }
+  
+  char url[96];
+  snprintf(url, sizeof(url), "http://%s/json/state", ip.c_str());
+  
+  esp_http_client_config_t cfg = {};
+  cfg.url = url;
+  cfg.timeout_ms = 2000;
+  cfg.skip_cert_common_name_check = true;
+  cfg.method = HTTP_METHOD_GET;
+  
+  esp_http_client_handle_t client = esp_http_client_init(&cfg);
+  if (!client) {
+    ESP_LOGW(TAG, "Failed to init HTTP client for state get: %s", ip.c_str());
+    return "";
+  }
+  
+  std::string state_json;
+  esp_err_t err = esp_http_client_perform(client);
+  if (err == ESP_OK) {
+    const int status_code = esp_http_client_get_status_code(client);
+    if (status_code == 200) {
+      const int content_length = esp_http_client_get_content_length(client);
+      if (content_length > 0 && content_length < 4096) {  // Reasonable size limit
+        char* buffer = static_cast<char*>(malloc(content_length + 1));
+        if (buffer) {
+          int data_read = esp_http_client_read_response(client, buffer, content_length);
+          if (data_read > 0) {
+            buffer[data_read] = '\0';
+            state_json = buffer;
+          }
+          free(buffer);
+        }
+      }
+    } else {
+      ESP_LOGW(TAG, "Failed to get WLED state from %s: HTTP %d", ip.c_str(), status_code);
+    }
+  } else {
+    ESP_LOGW(TAG, "Failed to get WLED state from %s: %s", ip.c_str(), esp_err_to_name(err));
+  }
+  
+  esp_http_client_cleanup(client);
+  return state_json;
+}
+
+void disable_wled_ddp_mode(const std::string& ip);
+void enable_wled_ddp_mode(const std::string& ip) {
+  if (ip.empty()) {
+    return;
+  }
+  
+  // Check cache - only enable DDP mode once per device every 5 minutes
+  const uint64_t now_us = esp_timer_get_time();
+  auto it = ddp_mode_enabled_cache.find(ip);
+  if (it != ddp_mode_enabled_cache.end()) {
+    const uint64_t age_us = now_us - it->second;
+    if (age_us < 300'000'000ULL) {  // 5 minutes
+      return;  // Already enabled recently
+    }
+  }
+  
+  // First, save current WLED state before enabling DDP mode
+  // This allows us to restore it later when disabling DDP
+  if (wled_state_cache.find(ip) == wled_state_cache.end()) {
+    std::string current_state = get_wled_state(ip);
+    if (!current_state.empty()) {
+      wled_state_cache[ip] = current_state;
+      ESP_LOGI(TAG, "Saved WLED state for %s before enabling DDP", ip.c_str());
+    } else {
+      ESP_LOGW(TAG, "Failed to get WLED state for %s, will restore default state", ip.c_str());
+    }
+  }
+  
+  // Send HTTP POST to WLED API to enable DDP receive mode
+  char url[96];
+  snprintf(url, sizeof(url), "http://%s/json/state", ip.c_str());
+  
+  esp_http_client_config_t cfg = {};
+  cfg.url = url;
+  cfg.timeout_ms = 2000;
+  cfg.skip_cert_common_name_check = true;
+  cfg.method = HTTP_METHOD_POST;
+  
+  esp_http_client_handle_t client = esp_http_client_init(&cfg);
+  if (!client) {
+    ESP_LOGW(TAG, "Failed to init HTTP client for DDP enable: %s", ip.c_str());
+    return;
+  }
+  
+  // JSON payload: enable live mode (DDP receive) and turn off local effects
+  const char* json_payload = "{\"live\":true,\"on\":false}";
+  esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
+  esp_http_client_set_header(client, "Content-Type", "application/json");
+  
+  esp_err_t err = esp_http_client_perform(client);
+  if (err == ESP_OK) {
+    const int status_code = esp_http_client_get_status_code(client);
+    if (status_code == 200) {
+      ESP_LOGI(TAG, "Enabled DDP receive mode for WLED device: %s", ip.c_str());
+      ddp_mode_enabled_cache[ip] = now_us;
+    } else {
+      ESP_LOGW(TAG, "Failed to enable DDP mode for %s: HTTP %d", ip.c_str(), status_code);
+    }
+  } else {
+    ESP_LOGW(TAG, "Failed to enable DDP mode for %s: %s", ip.c_str(), esp_err_to_name(err));
+  }
+  
+  esp_http_client_cleanup(client);
+}
+
+void disable_wled_ddp_mode(const std::string& ip) {
+  if (ip.empty()) {
+    return;
+  }
+  
+  bool restored = false;
+  
+  // Restore previous WLED state if we saved it
+  auto state_it = wled_state_cache.find(ip);
+  if (state_it != wled_state_cache.end() && !state_it->second.empty()) {
+    // Parse saved state and restore it, but ensure live=false
+    cJSON* saved_state = cJSON_Parse(state_it->second.c_str());
+    if (saved_state) {
+      // Ensure live mode is disabled
+      cJSON* live = cJSON_GetObjectItem(saved_state, "live");
+      if (live) {
+        cJSON_SetBoolValue(live, false);
+      } else {
+        cJSON_AddBoolToObject(saved_state, "live", false);
+      }
+      
+      // Convert back to JSON string
+      char* restored_json = cJSON_PrintUnformatted(saved_state);
+      if (restored_json) {
+        char url[96];
+        snprintf(url, sizeof(url), "http://%s/json/state", ip.c_str());
+        
+        esp_http_client_config_t cfg = {};
+        cfg.url = url;
+        cfg.timeout_ms = 2000;
+        cfg.skip_cert_common_name_check = true;
+        cfg.method = HTTP_METHOD_POST;
+        
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        if (client) {
+          esp_http_client_set_post_field(client, restored_json, strlen(restored_json));
+          esp_http_client_set_header(client, "Content-Type", "application/json");
+          
+          esp_err_t err = esp_http_client_perform(client);
+          if (err == ESP_OK) {
+            const int status_code = esp_http_client_get_status_code(client);
+            if (status_code == 200) {
+              ESP_LOGI(TAG, "Restored previous WLED state for %s (disabled DDP mode)", ip.c_str());
+              restored = true;
+            } else {
+              ESP_LOGW(TAG, "Failed to restore WLED state for %s: HTTP %d", ip.c_str(), status_code);
+            }
+          } else {
+            ESP_LOGW(TAG, "Failed to restore WLED state for %s: %s", ip.c_str(), esp_err_to_name(err));
+          }
+          esp_http_client_cleanup(client);
+        }
+        free(restored_json);
+      }
+      cJSON_Delete(saved_state);
+    }
+  }
+  
+  // Fallback: simple disable if we don't have saved state or restore failed
+  if (!restored) {
+    char url[96];
+    snprintf(url, sizeof(url), "http://%s/json/state", ip.c_str());
+    
+    esp_http_client_config_t cfg = {};
+    cfg.url = url;
+    cfg.timeout_ms = 2000;
+    cfg.skip_cert_common_name_check = true;
+    cfg.method = HTTP_METHOD_POST;
+    
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+      ESP_LOGW(TAG, "Failed to init HTTP client for DDP disable: %s", ip.c_str());
+      return;
+    }
+    
+    // JSON payload: disable live mode (DDP receive) and turn on WLED (restore normal mode)
+    // This allows WLED to work independently again
+    const char* json_payload = "{\"live\":false,\"on\":true}";
+    esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    
+    esp_err_t err = esp_http_client_perform(client);
+    if (err == ESP_OK) {
+      const int status_code = esp_http_client_get_status_code(client);
+      if (status_code == 200) {
+        ESP_LOGI(TAG, "Disabled DDP receive mode for WLED device: %s (restored normal mode)", ip.c_str());
+      } else {
+        ESP_LOGW(TAG, "Failed to disable DDP mode for %s: HTTP %d", ip.c_str(), status_code);
+      }
+    } else {
+      ESP_LOGW(TAG, "Failed to disable DDP mode for %s: %s", ip.c_str(), esp_err_to_name(err));
+    }
+    
+    esp_http_client_cleanup(client);
+  }
+  
+  // Remove from caches
+  ddp_mode_enabled_cache.erase(ip);
+  wled_state_cache.erase(ip);
+}
 
 struct Rgb {
   float r{1.0f};
@@ -194,6 +416,17 @@ esp_err_t WledEffectsRuntime::start(AppConfig* cfg, LedEngineRuntime* led_runtim
 
 void WledEffectsRuntime::stop() {
   running_ = false;
+  
+  // Disable DDP mode for all active devices before stopping
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!active_ddp_devices_.empty()) {
+    ESP_LOGI(TAG, "Stopping WLED effects runtime - disabling DDP mode for %zu devices", active_ddp_devices_.size());
+    for (const auto& ip : active_ddp_devices_) {
+      disable_wled_ddp_mode(ip);
+    }
+    active_ddp_devices_.clear();
+  }
+  
   if (task_) {
     vTaskDelay(pdMS_TO_TICKS(10));
     vTaskDelete(task_);
@@ -844,15 +1077,17 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   
   if (!ok) {
     if (frame_idx % 60 == 0) {  // Log every 60 frames (~1 second at 60fps) to avoid spam
-      ESP_LOGW(TAG, "DDP send failed -> %s:%u (device %s, effect: %s)", 
-               ip.c_str(), port, device.id.c_str(), binding.effect.effect.c_str());
+      ESP_LOGW(TAG, "DDP send failed -> %s:%u (device %s, effect: %s, enabled=%d, ddp=%d, active=%d)", 
+               ip.c_str(), port, device.id.c_str(), binding.effect.effect.c_str(),
+               binding.enabled ? 1 : 0, binding.ddp ? 1 : 0, device.active ? 1 : 0);
     }
     // Invalidate cache on failure
     ddp_addr_cache_.erase(ip);
   } else if (frame_idx % 300 == 0) {  // Log success every 5 seconds for debugging
-    ESP_LOGI(TAG, "DDP send OK -> %s:%u (device %s, effect: %s, %u LEDs)", 
+    ESP_LOGI(TAG, "DDP send OK -> %s:%u (device %s, effect: %s, %u LEDs, channel %lu)", 
              ip.c_str(), port, device.id.c_str(), binding.effect.effect.c_str(), 
-             static_cast<unsigned>(device.leds == 0 ? 60 : device.leds));
+             static_cast<unsigned>(device.leds == 0 ? 60 : device.leds),
+             static_cast<unsigned long>(channel));
   }
   
   return ok;
@@ -934,12 +1169,29 @@ void WledEffectsRuntime::task_loop() {
       vTaskDelay(pdMS_TO_TICKS(400));
       continue;
     }
-    if (!should_run()) {
+    const auto status = wled_discovery_status();
+    
+    // Track which devices have active DDP mode for cleanup when effects are stopped
+    static bool was_running = false;
+    const bool is_running = should_run();
+    
+    // If effects were just stopped, disable DDP mode for all active devices
+    if (was_running && !is_running) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!active_ddp_devices_.empty()) {
+        ESP_LOGI(TAG, "Effects stopped - disabling DDP mode for %zu WLED devices", active_ddp_devices_.size());
+        for (const auto& ip : active_ddp_devices_) {
+          disable_wled_ddp_mode(ip);
+        }
+        active_ddp_devices_.clear();
+      }
+    }
+    was_running = is_running;
+    
+    if (!is_running) {
       vTaskDelay(delay);
       continue;
     }
-
-    const auto status = wled_discovery_status();
     
     // Render effects for WLED devices (via DDP)
     // This is the central controller: generates effects (WLED or LEDFx, audio-reactive if enabled) and sends to WLED devices
@@ -962,17 +1214,63 @@ void WledEffectsRuntime::task_loop() {
         ESP_LOGD(TAG, "Binding for device %s has DDP disabled", binding.device_id.c_str());
         continue;
       }
+      // Check if effect is assigned
+      if (binding.effect.effect.empty()) {
+        ESP_LOGW(TAG, "Binding for device %s has no effect assigned", binding.device_id.c_str());
+        continue;
+      }
       WledDeviceConfig dev{};
       std::string ip;
       if (!resolve_device(binding.device_id, devices_snapshot, status, dev, ip)) {
         ESP_LOGW(TAG, "Cannot resolve device %s (not found or inactive)", binding.device_id.c_str());
         continue;
       }
+      if (ip.empty()) {
+        ESP_LOGW(TAG, "Device %s has no IP address", binding.device_id.c_str());
+        continue;
+      }
+      // Track this device as having active DDP mode
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        active_ddp_devices_.insert(ip);
+      }
+      // Enable DDP receive mode in WLED if not already enabled (only once per device, not every frame)
+      // This ensures WLED is in DDP receive mode and not running local effects
+      if (frame_idx == 0 || frame_idx % 1800 == 0) {  // Check every 30 seconds at 60fps
+        enable_wled_ddp_mode(ip);
+      }
       const bool ok = render_and_send(binding, dev, ip, frame_idx, global_brightness, fps);
       if (!ok && frame_idx % 60 == 0) {  // Log every 60 frames (~1 second at 60fps)
         ESP_LOGW(TAG, "Failed to render/send effect '%s' to device %s (%s:%u)", 
                  binding.effect.effect.c_str(), binding.device_id.c_str(), ip.c_str(), 
                  cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : 4048);
+      }
+    }
+    
+    // Clean up devices that are no longer active (removed from bindings)
+    // This prevents keeping DDP mode enabled for devices that are no longer configured
+    if (frame_idx % 1800 == 0) {  // Check every 30 seconds
+      std::unordered_set<std::string> current_active_ips;
+      for (const auto& binding : fx.bindings) {
+        if (!binding.enabled || !binding.ddp || binding.device_id.empty()) {
+          continue;
+        }
+        WledDeviceConfig dev{};
+        std::string ip;
+        if (resolve_device(binding.device_id, devices_snapshot, status, dev, ip) && !ip.empty()) {
+          current_active_ips.insert(ip);
+        }
+      }
+      // Disable DDP for devices that are no longer in active bindings
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (auto it = active_ddp_devices_.begin(); it != active_ddp_devices_.end();) {
+        if (current_active_ips.find(*it) == current_active_ips.end()) {
+          ESP_LOGI(TAG, "Device %s no longer in active bindings - disabling DDP mode", it->c_str());
+          disable_wled_ddp_mode(*it);
+          it = active_ddp_devices_.erase(it);
+        } else {
+          ++it;
+        }
       }
     }
 

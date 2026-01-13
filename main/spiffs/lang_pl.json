@@ -336,5 +336,7 @@
   "colFxAudioLink": "Audio",
   "colFxAudioProfile": "Profil audio",
   "btn_save_audio": "Zapisz audio",
-  "btn_save_global": "Zapisz"
+  "btn_save_global": "Zapisz",
+  "preview_title": "Podgląd urządzeń",
+  "preview_subtitle": "Podgląd na żywo efektów na wszystkich urządzeniach. Kliknij urządzenie, aby skonfigurować."
 }

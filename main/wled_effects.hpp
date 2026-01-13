@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -50,6 +51,7 @@ class WledEffectsRuntime {
   bool running_{false};
   uint8_t seq_{0};
   std::unordered_map<std::string, float> envelope_state_;
+  std::unordered_set<std::string> active_ddp_devices_;  // Track devices with active DDP mode
   
   // Performance optimizations for multiple devices/segments
   struct CachedAddrInfo {

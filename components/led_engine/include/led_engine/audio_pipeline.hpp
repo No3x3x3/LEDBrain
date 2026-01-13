@@ -34,9 +34,7 @@ AudioMetrics led_audio_get_metrics();
 void led_audio_set_metrics(const AudioMetrics& metrics);
 // Calculate energy from custom frequency range (Hz)
 // Returns energy from freq_min to freq_max, or 0.0f if range is invalid or spectrum not available
-float led_audio_get_custom_energy(float freq_min, float freq_max);
-
-// Get value for a specific frequency band or metric
+float led_audio_get_custom_energy(float freq_min, float freq_max);// Get value for a specific frequency band or metric
 // Available bands: "sub_bass", "bass_low", "bass_high", "mid_low", "mid_mid", "mid_high",
 //                  "treble_low", "treble_mid", "treble_high", "bass", "mid", "treble",
 //                  "energy", "beat", "tempo_bpm"

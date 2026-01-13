@@ -12,8 +12,6 @@
       <h1>LEDBrain</h1>
     </div>
     <div class="top-actions">
-      <button id="btnSaveGlobal" class="primary ghost">Save</button>
-      <button id="btnPlayback" class="primary subtle" data-state="stopped" disabled>Start output</button>
       <label class="top-slider" for="brightnessGlobal">
         <span id="lblGlobalBrightness" class="muted">Brightness</span>
         <div class="slider-shell">
@@ -29,6 +27,38 @@
           <path d="M19 14a7 7 0 0 1-11.66 3.8L3 15" />
         </svg>
       </button>
+      <div class="network-status" id="networkStatus" data-type="ethernet">
+        <svg class="network-icon network-ethernet" viewBox="0 0 24 24">
+          <path d="M7 15h10v-2H7v2zm-4 4h18v-2H3v2zm0-8h18V9H3v2zm4-4h10V5H7v2z"/>
+        </svg>
+        <svg class="network-icon network-wifi" viewBox="0 0 24 24">
+          <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.07 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+        </svg>
+        <div class="wifi-signal-bars" data-strength="0">
+          <svg viewBox="0 0 24 24" class="network-icon">
+            <rect class="bar-1" x="2" y="18" width="4" height="4" rx="1"/>
+            <rect class="bar-2" x="8" y="14" width="4" height="8" rx="1"/>
+            <rect class="bar-3" x="14" y="10" width="4" height="12" rx="1"/>
+          </svg>
+        </div>
+      </div>
+      <div class="network-traffic" id="networkTraffic">
+        <div class="traffic-item">
+          <svg class="traffic-icon traffic-up" viewBox="0 0 24 24">
+            <path d="M7 14l5-5 5 5z"/>
+          </svg>
+          <span class="traffic-value" id="trafficTx">0 KB/s</span>
+        </div>
+        <div class="traffic-item">
+          <svg class="traffic-icon traffic-down" viewBox="0 0 24 24">
+            <path d="M7 10l5 5 5-5z"/>
+          </svg>
+          <span class="traffic-value" id="trafficRx">0 KB/s</span>
+        </div>
+      </div>
+      <button id="btnToggleAll" class="primary subtle" data-state="stopped">Start All</button>
+      <button id="btnToggleEffects" class="primary subtle" data-state="stopped">Start Effects</button>
+      <button id="btnToggleAudio" class="primary subtle" data-state="stopped">Start Audio</button>
       <div class="chip" id="chipIp">IP: --</div>
       <button id="btnReboot" class="danger">Reboot</button>
     </div>
@@ -57,39 +87,26 @@
     <main class="content">
       <section id="overview" class="view active">
         <header>
-          <h2 id="overviewTitle">Device dashboard</h2>
-          <p id="overviewSubtitle" class="muted">Status summary and quick actions.</p>
+          <h2 id="overviewTitle">Devices</h2>
+          <p id="overviewSubtitle" class="muted">Click a device to configure effects.</p>
         </header>
-        <div class="device-explorer">
-          <article class="card device-list-card">
-            <header class="card-header">
-              <div>
-                <h3 id="deviceBrowserTitle">Devices</h3>
-                <p class="muted" id="deviceBrowserSubtitle">Pick a controller or segment to tweak effects.</p>
-              </div>
-              <div class="device-actions">
-                <button id="btnDeviceRescan" class="ghost small">Rescan</button>
-                <button id="btnDeviceAdd" class="ghost small">Add WLED</button>
-              </div>
-            </header>
-            <div id="deviceList" class="device-list">
-              <div class="placeholder muted" id="deviceListEmpty">No devices yet</div>
-            </div>
-          </article>
-
-          <article class="card device-detail-card" id="deviceDetail">
-            <header class="card-header">
-              <div>
-                <h3 id="deviceDetailTitle">Device detail</h3>
-                <p class="muted" id="deviceDetailSubtitle">Status, capabilities and quick effect controls.</p>
-              </div>
-              <div class="pill ghost" id="deviceDetailType">-</div>
-            </header>
-            <div class="device-detail-body" id="deviceDetailBody">
-              <div class="placeholder muted" id="deviceDetailPlaceholder">Select something from the list.</div>
-            </div>
-          </article>
+        <div class="device-actions-bar" style="margin-bottom: 1.5rem; display: flex; gap: 0.5rem; align-items: center;">
+          <button id="btnDeviceRescan" class="ghost small">Rescan</button>
+          <button id="btnDeviceAdd" class="ghost small">Add WLED</button>
+          <div style="flex: 1;"></div>
+          <label class="switch compact">
+            <input type="checkbox" id="previewEnabled" checked>
+            <span></span>
+          </label>
+          <span class="muted" style="font-size: 0.8rem;">Live preview</span>
         </div>
+        <div class="preview-devices-grid" id="previewDevicesGrid">
+          <div class="preview-empty">
+            <p class="muted">No devices configured</p>
+            <p class="small muted">Add devices or segments to see live preview</p>
+          </div>
+        </div>
+        
         <div class="cards">
           <article class="card">
             <header>
@@ -225,6 +242,16 @@
             </div>
             <p class="form-hint" id="ledPowerHint">Pins deliver only data. Power strips from the PSU and use common ground.</p>
           </article>
+          
+          <article class="card" id="segmentDeviceDetailCard" style="display: none;">
+            <header class="card-header">
+              <div>
+                <h3 id="segmentDeviceDetailTitle">Segment Effect Configuration</h3>
+                <p class="muted" id="segmentDeviceDetailSubtitle">Configure effect engine, effect, and parameters.</p>
+              </div>
+            </header>
+            <div id="segmentDeviceDetailBody"></div>
+          </article>
         </div>
 
         <div class="led-pane" id="config-virtual-pane">
@@ -237,6 +264,16 @@
               <button id="btnAddVirtual" class="ghost small">Add virtual segment</button>
             </header>
             <div id="virtualList" class="virtual-list"></div>
+          </article>
+          
+          <article class="card" id="virtualDeviceDetailCard" style="display: none;">
+            <header class="card-header">
+              <div>
+                <h3 id="virtualDeviceDetailTitle">Virtual Segment Effect Configuration</h3>
+                <p class="muted" id="virtualDeviceDetailSubtitle">Configure effect engine, effect, and parameters.</p>
+              </div>
+            </header>
+            <div id="virtualDeviceDetailBody"></div>
           </article>
         </div>
 
@@ -314,6 +351,7 @@
                     <th id="wledTableSegments">Segments</th>
                     <th id="wledTableStatus">Status</th>
                     <th id="wledTableLastSeen">Last seen</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody id="wledTableBody"></tbody>
@@ -339,6 +377,16 @@
             <div class="form-actions end">
               <button type="button" class="primary" id="btnWledAdd">Add controller</button>
             </div>
+          </article>
+          
+          <article class="card" id="wledDeviceDetailCard" style="display: none;">
+            <header class="card-header">
+              <div>
+                <h3 id="wledDeviceDetailTitle">Device Effect Configuration</h3>
+                <p class="muted" id="wledDeviceDetailSubtitle">Configure effect engine, effect, and parameters.</p>
+              </div>
+            </header>
+            <div id="wledDeviceDetailBody"></div>
           </article>
         </div>
       </section>

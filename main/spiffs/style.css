@@ -175,6 +175,7 @@ body {
   height: 32px;
   color: var(--text);
   cursor: default;
+  margin: 0 0.5rem;
 }
 
 .network-icon {
@@ -1434,8 +1435,9 @@ button.primary.subtle {
   border-color: rgba(255, 168, 220, 0.6);
 }
 
-button.primary.subtle[data-state="running"] {
+button.primary.subtle[data-state="playing"] {
   background: rgba(255, 122, 184, 0.18);
+  border-color: rgba(255, 168, 220, 0.8);
 }
 
 button.ghost {

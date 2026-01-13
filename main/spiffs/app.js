@@ -1,4 +1,4 @@
-// Simple test to verify JavaScript is executing
+﻿// Simple test to verify JavaScript is executing
 console.log("=== LEDBrain app.js loaded ===");
 if (typeof document === "undefined") {
   console.error("FATAL: document is undefined!");
@@ -559,7 +559,7 @@ function renderLang() {
   renderEffectCatalog("wled"); // Default to WLED
   renderLedConfig();
   renderLightsDashboard();
-  updatePlaybackButton();
+  updateControlButtons();
   const refreshBtn = qs("btnRefresh");
   if (refreshBtn) {
     refreshBtn.setAttribute("title", t("btn_refresh"));
@@ -573,7 +573,7 @@ function renderEffectCatalog(engine) {
     console.warn("renderEffectCatalog: effectCatalog datalist not found");
     return;
   }
-  // Filter effects by engine
+  // Filter effects by engine - WLED and LEDFx have separate effect lists
   let effects = [];
   if (engine === "wled") {
     // WLED effects - get from EFFECT_LIBRARY where engine is "wled"
@@ -584,14 +584,15 @@ function renderEffectCatalog(engine) {
         }
       }
     }
-    // Also include basic effects from EFFECT_CATALOG that are common
+    // Also include basic effects from EFFECT_CATALOG (these are WLED effects)
     for (const name of EFFECT_CATALOG) {
       if (!effects.includes(name)) {
         effects.push(name);
       }
     }
-  } else {
-    // LEDFx effects - get from EFFECT_LIBRARY where engine is "ledfx"
+  } else if (engine === "ledfx") {
+    // LEDFx effects - ONLY get from EFFECT_LIBRARY where engine is "ledfx"
+    // DO NOT include EFFECT_CATALOG as those are WLED effects
     for (const group of EFFECT_LIBRARY) {
       for (const eff of group.effects) {
         if (eff.engine === "ledfx" && !effects.includes(eff.name)) {
@@ -599,7 +600,16 @@ function renderEffectCatalog(engine) {
         }
       }
     }
-    // Also include effects from EFFECT_CATALOG that might work with LEDFx
+  } else {
+    // Unknown engine - include all effects
+    console.warn(`renderEffectCatalog: Unknown engine "${engine}", including all effects`);
+    for (const group of EFFECT_LIBRARY) {
+      for (const eff of group.effects) {
+        if (!effects.includes(eff.name)) {
+          effects.push(eff.name);
+        }
+      }
+    }
     for (const name of EFFECT_CATALOG) {
       if (!effects.includes(name)) {
         effects.push(name);
@@ -666,16 +676,31 @@ function startUptimeTicker() {
   }, 1000);
 }
 
-function updatePlaybackButton() {
-  const btn = qs("btnPlayback");
-  if (!btn) return;
-  const enabled = !!(state.ledState && state.ledState.enabled);
-  const labelKey = enabled ? "btn_stop_effects" : "btn_start_effects";
-  const fallback = enabled ? "Stop output" : "Start output";
-  const text = T[labelKey] ? t(labelKey) : fallback;
-  btn.textContent = text;
-  btn.dataset.state = enabled ? "running" : "stopped";
-  btn.disabled = false;
+function updateControlButtons() {
+  const effectsEnabled = state.ledState && state.ledState.enabled;
+  const audioEnabled = state.info?.led_engine?.audio?.running ?? false;
+  const allEnabled = effectsEnabled && audioEnabled;
+  
+  const btnAll = qs("btnToggleAll");
+  if (btnAll) {
+    btnAll.textContent = allEnabled ? "Stop All" : "Start All";
+    btnAll.dataset.state = allEnabled ? "playing" : "stopped";
+    btnAll.disabled = false;
+  }
+  
+  const btnEffects = qs("btnToggleEffects");
+  if (btnEffects) {
+    btnEffects.textContent = effectsEnabled ? "Stop Effects" : "Start Effects";
+    btnEffects.dataset.state = effectsEnabled ? "playing" : "stopped";
+    btnEffects.disabled = false;
+  }
+  
+  const btnAudio = qs("btnToggleAudio");
+  if (btnAudio) {
+    btnAudio.textContent = audioEnabled ? "Stop Audio" : "Start Audio";
+    btnAudio.dataset.state = audioEnabled ? "playing" : "stopped";
+    btnAudio.disabled = false;
+  }
 }
 
 async function loadLedState() {
@@ -686,7 +711,7 @@ async function loadLedState() {
       state.globalBrightness = clamp(state.ledState.brightness, 1, MAX_BRIGHTNESS);
       syncBrightnessUi();
     }
-    updatePlaybackButton();
+    updateControlButtons();
   } catch (err) {
     console.warn("led state", err);
   }
@@ -720,9 +745,50 @@ async function applyBrightness(value) {
   }
 }
 
-async function togglePlayback() {
+async function toggleAll() {
+  const effectsEnabled = state.ledState && state.ledState.enabled;
+  const audioEnabled = state.info?.led_engine?.audio?.running ?? false;
+  const allEnabled = effectsEnabled && audioEnabled;
+  const next = !allEnabled;
+  
+  const btn = qs("btnToggleAll");
+  if (btn) btn.disabled = true;
+  try {
+    // Toggle both effects and audio
+    await Promise.all([
+      fetch("/api/led/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      }),
+      fetch("/api/audio/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      })
+    ]);
+    state.ledState = state.ledState || {};
+    state.ledState.enabled = next;
+    if (state.info && state.info.led_engine) {
+      state.info.led_engine.enabled = next;
+      if (state.info.led_engine.audio) {
+        state.info.led_engine.audio.running = next;
+      }
+      updateOverview();
+    }
+    updateControlButtons();
+    notify(next ? "All started" : "All stopped", "ok");
+  } catch (err) {
+    console.error(err);
+    notify(t("toast_save_failed"), "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function toggleEffects() {
   const next = !(state.ledState && state.ledState.enabled);
-  const btn = qs("btnPlayback");
+  const btn = qs("btnToggleEffects");
   if (btn) btn.disabled = true;
   try {
     await fetch("/api/led/state", {
@@ -736,8 +802,33 @@ async function togglePlayback() {
       state.info.led_engine.enabled = next;
       updateOverview();
     }
-    updatePlaybackButton();
+    updateControlButtons();
     notify(next ? t("toast_led_started") : t("toast_led_stopped"), "ok");
+  } catch (err) {
+    console.error(err);
+    notify(t("toast_save_failed"), "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function toggleAudio() {
+  const audioEnabled = state.info?.led_engine?.audio?.running ?? false;
+  const next = !audioEnabled;
+  const btn = qs("btnToggleAudio");
+  if (btn) btn.disabled = true;
+  try {
+    await fetch("/api/audio/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: next }),
+    });
+    if (state.info && state.info.led_engine && state.info.led_engine.audio) {
+      state.info.led_engine.audio.running = next;
+      updateOverview();
+    }
+    updateControlButtons();
+    notify(next ? "Audio started" : "Audio stopped", "ok");
   } catch (err) {
     console.error(err);
     notify(t("toast_save_failed"), "error");
@@ -877,32 +968,76 @@ function createLightMetaRow(label, value) {
 
 function mergeWledDevices() {
   const map = new Map();
+  // Helper function to generate a unique key for a device
+  const getDeviceKey = (dev) => {
+    // Prefer id, then address, then name
+    return dev.id || dev.address || dev.ip || dev.name || "";
+  };
+  
+  // Helper function to find existing device by matching id, address, or ip
+  const findExistingKey = (dev, map) => {
+    const key = getDeviceKey(dev);
+    if (!key) return null;
+    
+    for (const [k, v] of map.entries()) {
+      // Match by id
+      if (dev.id && v.id && v.id === dev.id) return k;
+      // Match by address
+      if (dev.address && v.address && v.address === dev.address) return k;
+      if (dev.ip && v.address && v.address === dev.ip) return k;
+      if (dev.address && v.ip && v.ip === dev.address) return k;
+      // Match by key if it's the same
+      if (k === key) return k;
+    }
+    return null;
+  };
+  
   const stored = Array.isArray(state.config?.wled_devices) ? state.config.wled_devices : [];
   stored.forEach((dev, idx) => {
-    const key = dev.id || dev.address || dev.name || `stored-${idx}`;
-    map.set(key, {
-      id: dev.id || key,
-      name: dev.name || dev.address || dev.id || key,
-      address: dev.address || "",
-      leds: dev.leds || 0,
-      segments: dev.segments || 1,
-      online: false,
-      version: "",
-      ip: "",
-      age_ms: Number.POSITIVE_INFINITY,
-      http_verified: false,
-      manual: !dev.auto_discovered,
-    });
+    const key = getDeviceKey(dev) || `stored-${idx}`;
+    const existingKey = findExistingKey(dev, map);
+    
+    if (existingKey) {
+      // Update existing entry
+      const existing = map.get(existingKey);
+      map.set(existingKey, {
+        ...existing,
+        id: dev.id || existing.id || existingKey,
+        name: dev.name || existing.name || existingKey,
+        address: dev.address || existing.address || "",
+        ip: dev.address || existing.ip || "",
+        leds: dev.leds || existing.leds || 0,
+        segments: dev.segments || existing.segments || 1,
+        manual: !dev.auto_discovered,
+      });
+    } else {
+      map.set(key, {
+        id: dev.id || key,
+        name: dev.name || dev.address || dev.id || key,
+        address: dev.address || "",
+        ip: dev.address || "",
+        leds: dev.leds || 0,
+        segments: dev.segments || 1,
+        online: false,
+        version: "",
+        age_ms: Number.POSITIVE_INFINITY,
+        http_verified: false,
+        manual: !dev.auto_discovered,
+      });
+    }
   });
+  
   const discovered = Array.isArray(state.wledDevices) ? state.wledDevices : [];
   discovered.forEach((dev, idx) => {
-    const key = dev.id || dev.address || dev.ip || dev.name || `discovered-${idx}`;
+    const existingKey = findExistingKey(dev, map);
+    const key = existingKey || getDeviceKey(dev) || `discovered-${idx}`;
     const existing = map.get(key) || {};
     map.set(key, {
       ...existing,
       id: dev.id || existing.id || key,
       name: dev.name || existing.name || key,
       address: dev.address || dev.ip || existing.address || "",
+      ip: dev.ip || dev.address || existing.ip || "",
       leds:
         typeof dev.leds === "number"
           ? dev.leds
@@ -917,12 +1052,12 @@ function mergeWledDevices() {
           : 1,
       online: !!dev.online,
       version: dev.version || existing.version || "",
-      ip: dev.ip || existing.ip || "",
       age_ms: typeof dev.age_ms === "number" ? dev.age_ms : existing.age_ms,
       http_verified: dev.http_verified || existing.http_verified || false,
       manual: existing.manual ?? false,
     });
   });
+  
   return Array.from(map.values()).sort((a, b) =>
     (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
   );
@@ -1122,11 +1257,371 @@ function renderLightsDashboard() {
       grid.appendChild(group.renderer(item));
     });
   });
+  
+  // Update device preview after rendering dashboard
+  renderDevicePreview();
+}
+
+function renderDevicePreview() {
+  const grid = qs("previewDevicesGrid");
+  if (!grid) return;
+  
+  const previewEnabled = qs("previewEnabled")?.checked ?? true;
+  if (!previewEnabled) {
+    grid.innerHTML = '<div class="preview-empty"><p class="muted">Live preview disabled</p></div>';
+    return;
+  }
+  
+  // Collect all devices (WLED, physical, virtual)
+  const allDevices = [];
+  
+  // WLED devices
+  const wledDevices = mergeWledDevices();
+  wledDevices.forEach(dev => {
+    allDevices.push({
+      id: dev.id || `wled-${dev.name}`,
+      name: dev.name || "WLED Device",
+      type: "wled",
+      leds: dev.leds || 0,
+      effect: dev.effect || null,
+      enabled: dev.on !== false,
+      data: dev
+    });
+  });
+  
+  // Physical segments
+  const physicalSegs = buildPhysicalSegmentsSummary();
+  physicalSegs.forEach(seg => {
+    allDevices.push({
+      id: seg.id || `physical-${seg.name}`,
+      name: seg.name || "Physical Segment",
+      type: "physical",
+      leds: seg.leds || 0,
+      effect: seg.effect || null,
+      enabled: seg.enabled !== false,
+      data: seg
+    });
+  });
+  
+  // Virtual segments
+  const virtualSegs = buildVirtualSegmentsSummary();
+  virtualSegs.forEach(seg => {
+    allDevices.push({
+      id: seg.id || `virtual-${seg.name}`,
+      name: seg.name || "Virtual Segment",
+      type: "virtual",
+      leds: seg.leds || 0,
+      effect: seg.effect || null,
+      enabled: seg.enabled !== false,
+      data: seg
+    });
+  });
+  
+  grid.innerHTML = "";
+  
+  if (allDevices.length === 0) {
+    grid.innerHTML = '<div class="preview-empty"><p class="muted">No devices configured</p><p class="small muted">Add devices or segments to see live preview</p></div>';
+    return;
+  }
+  
+  allDevices.forEach(device => {
+    const card = document.createElement("div");
+    card.className = "preview-device-card";
+    card.dataset.deviceId = device.id;
+    card.dataset.deviceType = device.type;
+    
+    const header = document.createElement("div");
+    header.className = "preview-device-header";
+    
+    const title = document.createElement("h4");
+    title.className = "preview-device-title";
+    title.textContent = device.name;
+    header.appendChild(title);
+    
+    const typeBadge = document.createElement("span");
+    typeBadge.className = "preview-device-type";
+    typeBadge.textContent = device.type.toUpperCase();
+    header.appendChild(typeBadge);
+    
+    card.appendChild(header);
+    
+    // Canvas container
+    const canvasContainer = document.createElement("div");
+    canvasContainer.className = "preview-device-canvas-container";
+    
+    const canvas = document.createElement("canvas");
+    canvas.className = "preview-device-canvas";
+    canvas.width = 280;
+    canvas.height = 120;
+    canvas.dataset.deviceId = device.id;
+    canvasContainer.appendChild(canvas);
+    
+    card.appendChild(canvasContainer);
+    
+    // Device info
+    const info = document.createElement("div");
+    info.className = "preview-device-info";
+    
+    if (device.leds > 0) {
+      const ledsSpan = document.createElement("span");
+      ledsSpan.innerHTML = `<strong>${device.leds}</strong> LEDs`;
+      info.appendChild(ledsSpan);
+    }
+    
+    if (device.effect) {
+      const effectSpan = document.createElement("span");
+      effectSpan.innerHTML = `<strong>${device.effect}</strong>`;
+      info.appendChild(effectSpan);
+    }
+    
+    card.appendChild(info);
+    
+    // Actions
+    const actions = document.createElement("div");
+    actions.className = "preview-device-actions";
+    
+    const toggleBtn = document.createElement("button");
+    toggleBtn.className = "preview-device-toggle ghost small";
+    toggleBtn.textContent = device.enabled ? "Disable" : "Enable";
+    toggleBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      // Toggle device enabled state
+      if (device.type === "wled") {
+        // Toggle WLED device binding
+        const binding = getWledBinding(device.data.id || device.data.address || device.data.name);
+        if (binding) {
+          binding.enabled = !binding.enabled;
+          await saveWledEffects();
+          renderDevicePreview();
+          notify(binding.enabled ? "Device enabled" : "Device disabled", "ok");
+        }
+      } else if (device.type === "physical") {
+        // Toggle physical segment
+        const led = ensureLedEngineConfig();
+        if (led && device.data) {
+          const seg = (led.segments || []).find(s => s.id === device.data.id || s.segment_id === device.data.segment_id);
+          if (seg) {
+            seg.enabled = !seg.enabled;
+            await saveLedConfig();
+            renderDevicePreview();
+            notify(seg.enabled ? "Segment enabled" : "Segment disabled", "ok");
+          }
+        }
+      } else if (device.type === "virtual") {
+        // Toggle virtual segment
+        ensureVirtualSegments();
+        const seg = (state.config.virtual_segments || []).find(s => s.id === device.data.id || s.name === device.data.name);
+        if (seg) {
+          seg.enabled = seg.enabled === false ? true : false;
+          await saveLedConfig();
+          renderDevicePreview();
+          notify(seg.enabled !== false ? "Virtual segment enabled" : "Virtual segment disabled", "ok");
+        }
+      }
+    });
+    actions.appendChild(toggleBtn);
+    
+    card.appendChild(actions);
+    
+    // Click handler to select device and open effect configuration
+    card.addEventListener("click", () => {
+      // Remove previous selection
+      grid.querySelectorAll(".preview-device-card").forEach(c => c.classList.remove("selected"));
+      card.classList.add("selected");
+      
+      // Switch to LED tab to show device configuration
+      const navLedBtn = qs("navLed");
+      if (navLedBtn) {
+        navLedBtn.click();
+      }
+      
+      // Show device effect configuration after a short delay to allow tab switch
+      setTimeout(() => {
+        if (device.type === "wled") {
+          // Switch to WLED pane and show device effect form
+          const wledTab = qs("tabConfigWled");
+          if (wledTab) wledTab.click();
+          state.selectedDeviceKey = `wled:${device.data.id || device.data.address || device.data.name}`;
+          renderDeviceExplorer();
+          // Open effect configuration form for this WLED device
+          const deviceEntry = { type: "wled", meta: device.data };
+          renderDeviceDetail(deviceEntry);
+          // Scroll to effect form
+          setTimeout(() => {
+            const detailCard = qs("wledDeviceDetailCard");
+            if (detailCard) {
+              detailCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+          }, 200);
+        } else if (device.type === "physical") {
+          // Switch to Segments pane and show segment effect form
+          const segTab = qs("tabConfigSegments");
+          if (segTab) segTab.click();
+          state.selectedDeviceKey = `physical:${device.data.id || device.data.segment_id}`;
+          renderDeviceExplorer();
+          const deviceEntry = { type: "physical", meta: device.data };
+          renderDeviceDetail(deviceEntry);
+          // Scroll to effect form
+          setTimeout(() => {
+            const detailCard = qs("segmentDeviceDetailCard");
+            if (detailCard) {
+              detailCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+          }, 200);
+        } else if (device.type === "virtual") {
+          // Switch to Virtual segments pane and show segment effect form
+          const virtTab = qs("tabConfigVirtual");
+          if (virtTab) virtTab.click();
+          state.selectedDeviceKey = `virtual:${device.data.id || device.data.name}`;
+          renderDeviceExplorer();
+          const deviceEntry = { type: "virtual", meta: device.data };
+          renderDeviceDetail(deviceEntry);
+          // Scroll to effect form
+          setTimeout(() => {
+            const detailCard = qs("virtualDeviceDetailCard");
+            if (detailCard) {
+              detailCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+          }, 200);
+        }
+      }, 150);
+    });
+    
+    grid.appendChild(card);
+  });
+  
+  // Start preview animation
+  startPreviewAnimation();
+}
+
+let previewAnimationFrame = null;
+let previewFrameIndex = 0;
+
+function startPreviewAnimation() {
+  if (previewAnimationFrame) {
+    cancelAnimationFrame(previewAnimationFrame);
+  }
+  
+  const canvases = document.querySelectorAll(".preview-device-canvas");
+  if (canvases.length === 0) return;
+  
+  const previewEnabled = qs("previewEnabled")?.checked ?? true;
+  if (!previewEnabled) return;
+  
+  function animate() {
+    canvases.forEach(canvas => {
+      const deviceId = canvas.dataset.deviceId;
+      const card = canvas.closest(".preview-device-card");
+      if (!card) return;
+      
+      const deviceType = card.dataset.deviceType;
+      const deviceData = getDeviceData(deviceId, deviceType);
+      
+      if (deviceData && deviceData.enabled !== false) {
+        renderPreviewFrame(canvas, deviceData, previewFrameIndex);
+      } else {
+        // Clear canvas if disabled
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#0a0f18";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+    });
+    
+    previewFrameIndex++;
+    previewAnimationFrame = requestAnimationFrame(animate);
+  }
+  
+  animate();
+}
+
+function getDeviceData(deviceId, deviceType) {
+  // Get device data from state
+  if (deviceType === "wled") {
+    return state.wledDevices?.find(d => (d.id || `wled-${d.name}`) === deviceId);
+  } else if (deviceType === "physical") {
+    const segs = buildPhysicalSegmentsSummary();
+    return segs.find(s => (s.id || `physical-${s.name}`) === deviceId);
+  } else if (deviceType === "virtual") {
+    const segs = buildVirtualSegmentsSummary();
+    return segs.find(s => (s.id || `virtual-${s.name}`) === deviceId);
+  }
+  return null;
+}
+
+function renderPreviewFrame(canvas, device, frameIndex) {
+  const ctx = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  const leds = device.leds || 60;
+  
+  // Clear canvas
+  ctx.fillStyle = "#0a0f18";
+  ctx.fillRect(0, 0, width, height);
+  
+  // Simple effect simulation based on effect name
+  const effect = device.effect || "Solid";
+  const pixelWidth = width / leds;
+  
+  for (let i = 0; i < leds; i++) {
+    let r = 0, g = 0, b = 0;
+    
+    if (effect.toLowerCase().includes("rainbow")) {
+      const hue = ((i / leds) * 360 + frameIndex * 2) % 360;
+      const rgb = hslToRgb(hue / 360, 1, 0.5);
+      r = rgb[0];
+      g = rgb[1];
+      b = rgb[2];
+    } else if (effect.toLowerCase().includes("fire")) {
+      const intensity = Math.sin((i / leds) * Math.PI * 2 + frameIndex * 0.1) * 0.5 + 0.5;
+      r = Math.floor(255 * intensity);
+      g = Math.floor(100 * intensity);
+      b = Math.floor(20 * intensity);
+    } else if (effect.toLowerCase().includes("wave")) {
+      const wave = Math.sin((i / leds) * Math.PI * 4 + frameIndex * 0.1) * 0.5 + 0.5;
+      r = Math.floor(100 * wave);
+      g = Math.floor(150 * wave);
+      b = Math.floor(255 * wave);
+    } else {
+      // Default solid color
+      r = 255;
+      g = 140;
+      b = 210;
+    }
+    
+    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+    ctx.fillRect(i * pixelWidth, 0, pixelWidth, height);
+  }
+}
+
+function hslToRgb(h, s, l) {
+  let r, g, b;
+  if (s === 0) {
+    r = g = b = l;
+  } else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
 }
 
 function renderWledDetail(dev) {
-  const detail = qs("deviceDetailBody");
-  if (!detail) return;
+  const detail = qs("wledDeviceDetailBody");
+  const card = qs("wledDeviceDetailCard");
+  if (!detail || !card) return;
+  
+  // Show the detail card
+  card.style.display = "block";
   if (!dev) {
     detail.innerHTML = `<div class="placeholder muted">${t("device_detail_placeholder") || "Select device"}</div>`;
     return;
@@ -1164,6 +1659,13 @@ function renderWledDetail(dev) {
         <span></span> ${t("wled_ddp") || "DDP stream"}
       </label>
     </div>
+    <div class="form-hint" style="margin-top: 0.5rem; padding: 0.75rem; background: rgba(255, 140, 210, 0.1); border-radius: 8px; border: 1px solid rgba(255, 140, 210, 0.2);">
+      <strong>⚠️ WLED Device Setup:</strong><br>
+      <small>1. Enable DDP in WLED: Settings → Sync Settings → Receive via DDP<br>
+      2. Ensure WLED device is on the same network (Ethernet or WiFi)<br>
+      3. Check that device IP address is correct<br>
+      4. Device must be in DDP receive mode (not running local effects)</small>
+    </div>
     <div id="wledEffectForm"></div>
     <div class="actions">
       <button class="primary" id="btnSaveWledFx">${t("btn_save_led") || "Save"}</button>
@@ -1190,6 +1692,8 @@ function renderWledDetail(dev) {
   });
   qs("wledFxEnabled")?.addEventListener("change", (ev) => {
     binding.enabled = ev.target.checked;
+    // Auto-save when enabled is toggled
+    saveWledEffects();
   });
   qs("wledFxDdp")?.addEventListener("change", (ev) => {
     binding.ddp = ev.target.checked;
@@ -1981,27 +2485,42 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false) {
 }
 
 function renderDeviceDetail(entry) {
-  const detail = qs("deviceDetailBody");
-  if (!detail) return;
   if (!entry) {
-    detail.innerHTML = `<div class="placeholder muted">${t("device_detail_placeholder") || "Select device"}</div>`;
+    // Hide all detail cards
+    const wledCard = qs("wledDeviceDetailCard");
+    const segCard = qs("segmentDeviceDetailCard");
+    const virtCard = qs("virtualDeviceDetailCard");
+    if (wledCard) wledCard.style.display = "none";
+    if (segCard) segCard.style.display = "none";
+    if (virtCard) virtCard.style.display = "none";
     return;
   }
+  
   if (entry.type === "wled") {
     renderWledDetail(entry.meta);
     return;
   }
+  
   const led = ensureLedEngineConfig();
   if (!led) return;
+  
   if (entry.type === "virtual") {
+    const detail = qs("virtualDeviceDetailBody");
+    const card = qs("virtualDeviceDetailCard");
+    if (!detail || !card) return;
+    card.style.display = "block";
     const seg = entry.meta;
-    seg.effect = seg.effect || { effect: "Solid", brightness: 255, intensity: 128, speed: 128, audio_profile: "default" };
+    seg.effect = seg.effect || { effect: "Solid", brightness: 255, intensity: 128, speed: 128, audio_profile: "default", engine: "ledfx" };
     const fakeSegment = { name: seg.name, led_count: seg.members?.length || 0, audio: defaultSegmentAudio() };
-    renderEffectDetailForm(detail, fakeSegment, seg.effect);
+    renderEffectDetailForm(detail, fakeSegment, seg.effect, false);
   } else {
+    const detail = qs("segmentDeviceDetailBody");
+    const card = qs("segmentDeviceDetailCard");
+    if (!detail || !card) return;
+    card.style.display = "block";
     const assignment = ensureEffectAssignment(entry.meta.id || entry.meta.segment_id);
     const segment = (led.segments || []).find((s) => s.id === assignment.segment_id);
-    renderEffectDetailForm(detail, segment, assignment);
+    renderEffectDetailForm(detail, segment, assignment, false);
   }
 }
 
@@ -2109,6 +2628,9 @@ function updateOverview() {
       ? `${cfg.mqtt.ddp_target}:${cfg.mqtt.ddp_port}`
       : cfg.mqtt?.ddp_target || "-";
 
+  // Update diagnostic bar: network status
+  updateNetworkStatus(info);
+  
   const ledEnabled = info?.led_engine?.enabled ?? !!state.ledState.enabled;
   setBadge("badgeStatus", ledEnabled ? t("badge_running") : t("badge_stopped"), ledEnabled ? "ok" : "warn");
   if (cfg.network?.use_dhcp) {
@@ -2121,6 +2643,60 @@ function updateOverview() {
   } else {
     setBadge("badgeMqtt", t("badge_disabled"), "warn");
   }
+}
+
+function updateNetworkStatus(info) {
+  const networkStatus = qs("networkStatus");
+  if (!networkStatus) return;
+  
+  // Determine network type (ethernet or wifi)
+  // Ethernet takes priority if both are connected
+  const ethConnected = info.eth_connected ?? false;
+  const isWifi = (info.wifi_sta_connected || info.wifi_ap_active) && !ethConnected;
+  networkStatus.setAttribute("data-type", isWifi ? "wifi" : "ethernet");
+  
+  // Update WiFi signal strength if WiFi is active
+  if (isWifi) {
+    const signalBars = networkStatus.querySelector(".wifi-signal-bars");
+    if (signalBars) {
+      // WiFi signal strength (0-3, default to 2 if not provided)
+      const strength = info.wifi_rssi ? Math.min(3, Math.max(0, Math.floor((info.wifi_rssi + 100) / 25))) : 2;
+      signalBars.setAttribute("data-strength", strength);
+    }
+  } else {
+    // Hide WiFi signal bars for Ethernet
+    const signalBars = networkStatus.querySelector(".wifi-signal-bars");
+    if (signalBars) {
+      signalBars.setAttribute("data-strength", "0");
+    }
+  }
+  
+  // Update network traffic (if available in info)
+  const trafficTx = qs("trafficTx");
+  const trafficRx = qs("trafficRx");
+  if (trafficTx) {
+    if (info.network_tx_rate !== undefined) {
+      const txRate = formatTrafficRate(info.network_tx_rate);
+      trafficTx.textContent = txRate;
+    } else {
+      trafficTx.textContent = "0 KB/s";
+    }
+  }
+  if (trafficRx) {
+    if (info.network_rx_rate !== undefined) {
+      const rxRate = formatTrafficRate(info.network_rx_rate);
+      trafficRx.textContent = rxRate;
+    } else {
+      trafficRx.textContent = "0 KB/s";
+    }
+  }
+}
+
+function formatTrafficRate(bytesPerSecond) {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond < 0) return "0 KB/s";
+  if (bytesPerSecond < 1024) return `${Math.round(bytesPerSecond)} B/s`;
+  if (bytesPerSecond < 1024 * 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+  return `${(bytesPerSecond / (1024 * 1024)).toFixed(2)} MB/s`;
 }
 function updateDhcpUi() {
   const dhcpOn = qs("dhcp").checked;
@@ -2152,7 +2728,7 @@ function renderWledDevices() {
   if (!devices.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 6;
+    cell.colSpan = 7;
     cell.textContent = t("wled_empty");
     row.appendChild(cell);
     tbody.appendChild(row);
@@ -2197,7 +2773,46 @@ function renderWledDevices() {
     const age = dev.age_ms || 0;
     lastSeenCell.textContent = Number.isFinite(age) && age > 0 ? formatAge(age) : t("not_set");
 
-    [nameCell, idCell, ledsCell, segCell, statusCell, lastSeenCell].forEach((cell) => row.appendChild(cell));
+    const actionsCell = document.createElement("td");
+    // Only show delete button for manually added devices (not auto-discovered)
+    if (dev.manual !== false) {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "ghost small danger";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.title = "Remove device from configuration";
+      deleteBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Remove device "${dev.name || dev.id || dev.address}"?`)) {
+          return;
+        }
+        try {
+          const payload = {};
+          if (dev.id) payload.id = dev.id;
+          if (dev.address) payload.address = dev.address;
+          const res = await fetch("/api/wled/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            notify("Device removed", "ok");
+            await loadConfig();
+            renderWledDevices();
+            renderLightsDashboard();
+            renderDeviceExplorer();
+          } else {
+            const text = await res.text();
+            notify(`Failed to remove device: ${text}`, "error");
+          }
+        } catch (err) {
+          console.error(err);
+          notify("Failed to remove device", "error");
+        }
+      });
+      actionsCell.appendChild(deleteBtn);
+    }
+
+    [nameCell, idCell, ledsCell, segCell, statusCell, lastSeenCell, actionsCell].forEach((cell) => row.appendChild(cell));
     tbody.appendChild(row);
   });
 }
@@ -2213,7 +2828,7 @@ async function refreshInfo(showToast = false) {
     state.lastInfoRefresh = Date.now();
     if (info?.led_engine && typeof info.led_engine.enabled === "boolean") {
       state.ledState.enabled = info.led_engine.enabled;
-      updatePlaybackButton();
+      updateControlButtons();
     }
     
     // Update WiFi status in network tab
@@ -2336,8 +2951,20 @@ function getWledBinding(deviceId) {
   if (binding.ddp === undefined || binding.ddp === null) {
     binding.ddp = true;
   }
+  // Ensure enabled is true by default
+  if (binding.enabled === undefined || binding.enabled === null) {
+    binding.enabled = true;
+  }
   if (!binding.effect) {
     binding.effect = { effect: "Solid", brightness: 255, intensity: 128, speed: 128, audio_profile: "default" };
+  }
+  // Ensure effect name is set (required for rendering)
+  if (!binding.effect.effect || binding.effect.effect.trim() === "") {
+    binding.effect.effect = "Solid";
+  }
+  // Ensure engine is set (default to wled for WLED effects)
+  if (!binding.effect.engine) {
+    binding.effect.engine = "wled";
   }
   if (!binding.audio_channel) {
     binding.audio_channel = "stereo";
@@ -3785,15 +4412,34 @@ async function addWledManual(event) {
       address: payload.address,
       leds: payload.leds || 0,
       segments: payload.segments || 1,
-      active: true,
+      active: true,  // Must be true for DDP to work
       auto_discovered: false,
     };
     if (existingIdx >= 0) {
       const current = state.config.wled_devices[existingIdx];
       state.config.wled_devices[existingIdx] = { ...current, ...newEntry };
+      // Ensure active is true when updating
+      state.config.wled_devices[existingIdx].active = true;
     } else {
       state.config.wled_devices.push(newEntry);
     }
+    // Ensure device has a binding with effect when added/updated
+    const deviceId = newEntry.id;
+    const binding = getWledBinding(deviceId);
+    // Ensure binding has a valid effect
+    if (!binding.effect || !binding.effect.effect || binding.effect.effect.trim() === "") {
+      binding.effect = binding.effect || {};
+      binding.effect.effect = "Solid";
+      binding.effect.engine = "wled";
+      binding.effect.brightness = 255;
+      binding.effect.intensity = 128;
+      binding.effect.speed = 128;
+    }
+    // Ensure binding is enabled and DDP is enabled
+    binding.enabled = true;
+    binding.ddp = true;
+    // Save binding immediately
+    saveWledEffects();
     renderWledDevices();
     renderLightsDashboard();
     if (nameInput) nameInput.value = "";
@@ -4432,9 +5078,20 @@ function initEvents() {
     });
   }
 
-  const btnPlayback = qs("btnPlayback");
-  if (btnPlayback) {
-    btnPlayback.addEventListener("click", togglePlayback);
+  // New control buttons: Toggle All, Toggle Effects, Toggle Audio
+  const btnToggleAll = qs("btnToggleAll");
+  if (btnToggleAll) {
+    btnToggleAll.addEventListener("click", toggleAll);
+  }
+  
+  const btnToggleEffects = qs("btnToggleEffects");
+  if (btnToggleEffects) {
+    btnToggleEffects.addEventListener("click", toggleEffects);
+  }
+  
+  const btnToggleAudio = qs("btnToggleAudio");
+  if (btnToggleAudio) {
+    btnToggleAudio.addEventListener("click", toggleAudio);
   }
 
   const btnSaveSystem = qs("btnSaveSystem");
@@ -4494,6 +5151,17 @@ function initEvents() {
       }
     });
   }
+  
+  // Preview toggle
+  const previewToggle = qs("previewEnabled");
+  if (previewToggle) {
+    previewToggle.addEventListener("change", () => {
+      renderDevicePreview();
+    });
+  }
+  
+  // Diagnostic bar control buttons
+  // Old stop buttons removed - now using toggleAll, toggleEffects, toggleAudio
 
   const segBody = qs("segmentTableBody");
   if (segBody) {
@@ -4533,10 +5201,7 @@ function initEvents() {
   if (btnSaveAudio) {
     btnSaveAudio.addEventListener("click", saveLedConfig);
   }
-  const btnSaveGlobal = qs("btnSaveGlobal");
-  if (btnSaveGlobal) {
-    btnSaveGlobal.addEventListener("click", saveLedConfig);
-  }
+  // btnSaveGlobal removed - no longer needed
   const defEngine = qs("defaultEffectEngine");
   if (defEngine) {
     defEngine.addEventListener("change", (e) => {

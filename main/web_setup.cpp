@@ -19,6 +19,8 @@
 #include "wifi_c6_ctrl.hpp"
 #include "wifi_c6.hpp"
 #include "esp_wifi_types.h"
+#include "esp_netif.h"
+#include "lwip/netif.h"
 #include <string>
 #include <algorithm>
 #include <cctype>
@@ -303,9 +305,11 @@ static esp_err_t api_info(httpd_req_t* req){
   esp_netif_ip_info_t info;
   extern esp_netif_t *netif;
   bool has_eth_ip = false;
+  bool eth_connected = false;
   if (netif && esp_netif_get_ip_info(netif, &info) == ESP_OK && info.ip.addr != 0) {
     snprintf(ip,sizeof(ip), IPSTR, IP2STR(&info.ip));
     has_eth_ip = true;
+    eth_connected = true;
   }
   
   // Check WiFi IP via ESP32-C6 coprocessor (PPP)
@@ -324,8 +328,37 @@ static esp_err_t api_info(httpd_req_t* req){
   std::string wifi_ssid = wifi_c6_get_ssid();
   bool wifi_ap_mode = !wifi_connected && !wifi_ssid.empty() && wifi_ssid.find("Setup") != std::string::npos;
   
+  cJSON_AddBoolToObject(root,"eth_connected", eth_connected);
   cJSON_AddBoolToObject(root,"wifi_ap_active", wifi_ap_mode);
   cJSON_AddBoolToObject(root,"wifi_sta_connected", wifi_connected);
+  
+  // Network traffic statistics
+  // Note: lwip netif stats may not be directly accessible in ESP-IDF 5.5
+  // For now, return placeholder values - can be enhanced with custom tracking
+  static uint64_t last_stats_time_us = 0;
+  static uint64_t last_tx_bytes = 0;
+  static uint64_t last_rx_bytes = 0;
+  uint64_t current_time_us = esp_timer_get_time();
+  double tx_rate = 0.0;
+  double rx_rate = 0.0;
+  
+  // Try to get stats via esp_netif_net_stack API if available
+  // For now, use placeholder - proper implementation would require
+  // tracking bytes sent/received at driver level or using SNMP MIB2 if enabled
+  if (netif && last_stats_time_us > 0) {
+    uint64_t time_delta_us = current_time_us - last_stats_time_us;
+    if (time_delta_us > 0 && time_delta_us < 10'000'000ULL) {  // Only if less than 10 seconds
+      // Placeholder: would need actual byte counters from driver
+      // For now, return 0 - can be enhanced with custom tracking
+      tx_rate = 0.0;
+      rx_rate = 0.0;
+    }
+  }
+  
+  last_stats_time_us = current_time_us;
+  
+  cJSON_AddNumberToObject(root, "network_tx_rate", tx_rate);
+  cJSON_AddNumberToObject(root, "network_rx_rate", rx_rate);
   // uptime
   uint64_t us = esp_timer_get_time();
   cJSON_AddNumberToObject(root,"uptime_s", (int)(us/1000000ULL));
@@ -422,6 +455,70 @@ static esp_err_t api_wled_rescan(httpd_req_t* req) {
   wled_discovery_trigger_scan();
   httpd_resp_sendstr(req,"OK");
   return ESP_OK;
+}
+
+static esp_err_t api_wled_delete(httpd_req_t* req) {
+  auto body = read_body(req);
+  if (body.empty()) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty payload");
+  }
+  cJSON* root = cJSON_ParseWithLength(body.c_str(), body.size());
+  if (!root) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json");
+  }
+  std::string device_id;
+  std::string device_address;
+  if (cJSON* id = cJSON_GetObjectItem(root, "id"); cJSON_IsString(id)) {
+    device_id = trim_copy(id->valuestring);
+  }
+  if (cJSON* addr = cJSON_GetObjectItem(root, "address"); cJSON_IsString(addr)) {
+    device_address = trim_copy(addr->valuestring);
+  }
+  cJSON_Delete(root);
+
+  if (device_id.empty() && device_address.empty()) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "id or address required");
+  }
+
+  auto& devices = s_cfg->wled_devices;
+  auto it = std::remove_if(devices.begin(), devices.end(), [&](const WledDeviceConfig& cfg) {
+    if (!device_id.empty() && !cfg.id.empty() && cfg.id == device_id) {
+      return true;
+    }
+    if (!device_address.empty() && !cfg.address.empty() && cfg.address == device_address) {
+      return true;
+    }
+    // Also match by id if address matches
+    if (!device_address.empty() && !cfg.id.empty() && cfg.id == device_address) {
+      return true;
+    }
+    return false;
+  });
+  
+  if (it != devices.end()) {
+    devices.erase(it, devices.end());
+    // Also remove from WLED effects bindings
+    if (s_cfg) {
+      auto& bindings = s_cfg->wled_effects.bindings;
+      bindings.erase(
+        std::remove_if(bindings.begin(), bindings.end(), [&](const WledEffectBinding& b) {
+          return (!device_id.empty() && b.device_id == device_id) ||
+                 (!device_address.empty() && b.device_id == device_address);
+        }),
+        bindings.end()
+      );
+    }
+    if (config_save(*s_cfg) != ESP_OK) {
+      return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "persist failed");
+    }
+    if (s_wled_fx_runtime) {
+      s_wled_fx_runtime->update_config(*s_cfg);
+    }
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+  }
+  
+  return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "device not found");
 }
 
 static esp_err_t api_wled_add(httpd_req_t* req) {
@@ -977,6 +1074,8 @@ void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime, WledEffectsRunt
   httpd_register_uri_handler(server, &u_wled_rescan);
   httpd_uri_t u_wled_fx = { .uri="/api/wled/effects", .method=HTTP_POST, .handler=api_wled_effects_save, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_wled_fx);
+  httpd_uri_t u_wled_delete = { .uri="/api/wled/delete", .method=HTTP_POST, .handler=api_wled_delete, .user_ctx=NULL };
+  httpd_register_uri_handler(server, &u_wled_delete);
   httpd_uri_t u_led_pins = { .uri="/api/led/pins", .method=HTTP_GET, .handler=api_led_pins, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_led_pins);
   
