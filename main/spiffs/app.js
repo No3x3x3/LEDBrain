@@ -3142,6 +3142,9 @@ function updateOverview() {
   // Update diagnostic bar: network status
   updateNetworkStatus(info);
   
+  // Update diagnostic bar: CPU temperature
+  updateTemperatureIndicator(info);
+  
   const ledEnabled = info?.led_engine?.enabled ?? !!state.ledState.enabled;
   setBadge("badgeStatus", ledEnabled ? t("badge_running") : t("badge_stopped"), ledEnabled ? "ok" : "warn");
   if (cfg.network?.use_dhcp) {
@@ -3210,6 +3213,39 @@ function formatTrafficRate(bytesPerSecond) {
   if (bytesPerSecond < 1024) return `${Math.round(bytesPerSecond)} B/s`;
   if (bytesPerSecond < 1024 * 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
   return `${(bytesPerSecond / (1024 * 1024)).toFixed(2)} MB/s`;
+}
+
+function updateTemperatureIndicator(info) {
+  const tempIndicator = qs("temperatureIndicator");
+  const tempValue = qs("temperatureValue");
+  if (!tempIndicator || !tempValue) return;
+  
+  const cpuTemp = info.cpu_temp_celsius;
+  
+  if (cpuTemp === undefined || cpuTemp === null) {
+    tempValue.textContent = "--°C";
+    tempIndicator.setAttribute("data-temp", "0");
+    tempIndicator.removeAttribute("data-temp-level");
+    return;
+  }
+  
+  // Update temperature value
+  tempValue.textContent = `${Math.round(cpuTemp)}°C`;
+  tempIndicator.setAttribute("data-temp", cpuTemp.toFixed(1));
+  
+  // Determine color level based on strict test thresholds
+  let tempLevel = "green";
+  if (cpuTemp >= 100) {
+    tempLevel = "red";      // > 100°C
+  } else if (cpuTemp >= 85) {
+    tempLevel = "orange";    // 85°C - 100°C
+  } else if (cpuTemp >= 66) {
+    tempLevel = "yellow";   // 66°C - 85°C
+  } else {
+    tempLevel = "green";    // < 66°C
+  }
+  
+  tempIndicator.setAttribute("data-temp-level", tempLevel);
 }
 function updateDhcpUi() {
   const dhcpOn = qs("dhcp").checked;

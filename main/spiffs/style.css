@@ -291,6 +291,63 @@ body {
   font-family: "Courier New", monospace;
 }
 
+.temperature-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 8px;
+  background: rgba(76, 175, 80, 0.15);
+  border: 1px solid rgba(76, 175, 80, 0.4);
+  transition: all 0.3s ease;
+}
+
+.temperature-icon {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  opacity: 0.9;
+}
+
+.temperature-value {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  min-width: 45px;
+  text-align: right;
+  font-family: "Courier New", monospace;
+}
+
+/* Temperature color states based on thresholds */
+/* Green: < 66°C */
+.temperature-indicator[data-temp-level="green"] {
+  background: rgba(76, 175, 80, 0.15);
+  border-color: rgba(76, 175, 80, 0.4);
+  color: rgba(129, 199, 132, 1);
+}
+
+/* Yellow: 66°C - 85°C */
+.temperature-indicator[data-temp-level="yellow"] {
+  background: rgba(255, 193, 7, 0.15);
+  border-color: rgba(255, 193, 7, 0.4);
+  color: rgba(255, 224, 130, 1);
+}
+
+/* Orange: 85°C - 100°C */
+.temperature-indicator[data-temp-level="orange"] {
+  background: rgba(255, 152, 0, 0.15);
+  border-color: rgba(255, 152, 0, 0.4);
+  color: rgba(255, 183, 77, 1);
+}
+
+/* Red: > 100°C */
+.temperature-indicator[data-temp-level="red"] {
+  background: rgba(244, 67, 54, 0.15);
+  border-color: rgba(244, 67, 54, 0.4);
+  color: rgba(239, 154, 154, 1);
+}
+
 .chip {
   padding: 0.4rem 1rem;
   border-radius: 999px;

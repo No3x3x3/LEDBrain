@@ -21,10 +21,11 @@ struct GradientStop {
 };
 
 // Render LEDFx effect
+// time_s: time in seconds since effect start (for time-based animation normalization)
 std::vector<uint8_t> render_effect(const std::string& effect_name,
                                     const EffectAssignment& effect,
                                     uint16_t led_count,
-                                    uint32_t frame_idx,
+                                    float time_s,
                                     uint8_t global_brightness,
                                     uint16_t fps,
                                     const std::vector<GradientStop>& gradient,

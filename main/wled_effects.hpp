@@ -31,12 +31,13 @@ class WledEffectsRuntime {
   bool render_and_send(const WledEffectBinding& binding,
                        const WledDeviceConfig& device,
                        const std::string& ip,
-                       uint32_t frame_idx,
+                       float time_s,
+                       uint32_t frame_idx,  // Frame counter for caching/logging only
                        uint8_t global_brightness,
                        uint16_t fps);
   std::vector<uint8_t> render_frame(const WledEffectBinding& binding,
                                     uint16_t led_count,
-                                    uint32_t frame_idx,
+                                    float time_s,
                                     uint8_t global_brightness,
                                     uint16_t fps);
   float apply_envelope(const std::string& key, float input, uint16_t fps, uint16_t attack_ms, uint16_t release_ms);

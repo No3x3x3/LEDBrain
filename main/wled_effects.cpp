@@ -548,7 +548,7 @@ bool WledEffectsRuntime::resolve_device(const std::string& device_id,
 
 std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& binding,
                                                       uint16_t led_count,
-                                                      uint32_t frame_idx,
+                                                      float time_s,
                                                       uint8_t global_brightness,
                                                       uint16_t fps) {
   const uint16_t pixels = led_count == 0 ? 60 : led_count;
@@ -601,9 +601,9 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
       energy = metrics.energy_right > 0.0f ? metrics.energy_right : metrics.energy * 0.8f;
     }
     if (energy <= 0.0001f) {
-      energy = 0.35f + 0.35f * (sinf(frame_idx * 0.15f) * 0.5f + 0.5f);
+      energy = 0.35f + 0.35f * (sinf(time_s * 0.15f) * 0.5f + 0.5f);
     }
-    const float beat = metrics.beat > 0.0f ? metrics.beat : (sinf(frame_idx * 0.12f) * 0.5f + 0.5f);
+    const float beat = metrics.beat > 0.0f ? metrics.beat : (sinf(time_s * 0.12f) * 0.5f + 0.5f);
     
     float weighted = 0.0f;
     // Check if selected bands are configured
@@ -687,7 +687,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     const float intensity = binding.effect.intensity / 255.0f;
     const float direction = lower_copy(binding.effect.direction) == "reverse" ? -1.0f : 1.0f;
     
-    return ledfx_effects::render_effect(binding.effect.effect, binding.effect, led_count, frame_idx,
+    return ledfx_effects::render_effect(binding.effect.effect, binding.effect, led_count, time_s,
                                         global_brightness, fps, ledfx_gradient, ledfx_c1, ledfx_c2, ledfx_c3,
                                         brightness, audio_mod, speed, intensity, direction);
   }
@@ -698,20 +698,17 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   const float intensity = binding.effect.intensity / 255.0f;
   const float direction = lower_copy(binding.effect.direction) == "reverse" ? -1.0f : 1.0f;
 
-  // Debug: log effect name and parameters
-  if (frame_idx % 300 == 0) {  // Log every 5 seconds at 60fps
-    ESP_LOGI(TAG, "Rendering WLED effect: '%s' (engine=%s, brightness=%.2f, intensity=%.2f, speed=%.2f, pixels=%u)",
-             binding.effect.effect.c_str(),
-             binding.effect.engine.c_str(),
-             brightness,
-             intensity,
-             speed,
-             pixels);
-  }
+  // Debug: log effect name and parameters (removed frame_idx-based logging - frame_idx no longer available in render_frame)
+  // Logging moved to task_loop where frame_idx is still available
 
   uint8_t* dst = frame.data();
+  // Normalize time: convert frame_idx-based animation to time-based
+  // Assuming 60fps baseline, frame_idx increments by 60 per second
+  // So we use time_s * 60.0f to maintain same animation speed
+  const float normalized_time = time_s * 60.0f;
+  
   if (effect_name.find("rainbow") != std::string::npos) {
-    const float base_phase = frame_idx * speed * direction;
+    const float base_phase = normalized_time * speed * direction;
     for (uint16_t i = 0; i < pixels; ++i) {
       const float x = base_phase + (static_cast<float>(i) / static_cast<float>(pixels));
       const float r = sinf((x) * 6.2831f) * 0.5f + 0.5f;
@@ -727,12 +724,12 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
 
   if (effect_name.find("solid") != std::string::npos || effect_name.empty()) {
     // Solid color effect - always visible, even with minimal brightness
-    const float pulse = 0.8f + (sinf(frame_idx * speed * 1.5f) * 0.5f + 0.5f) * 0.2f * intensity;
+    const float pulse = 0.8f + (sinf(normalized_time * speed * 1.5f) * 0.5f + 0.5f) * 0.2f * intensity;
     // Ensure minimum visibility even if brightness is very low
     const float min_brightness = std::max(brightness, 0.1f);
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float phase = frame_idx * speed * 0.25f + pos * 0.5f * direction;
+      const float phase = normalized_time * speed * 0.25f + pos * 0.5f * direction;
       const float sample_pos = phase - std::floor(phase);
       const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, sample_pos);
       // WLED effects are not audio-reactive - don't use audio_mod
@@ -747,7 +744,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   // Energy / Spectrum visualization (LEDFx style)
   if (effect_name.find("energy") != std::string::npos || effect_name.find("spectrum") != std::string::npos) {
     AudioMetrics metrics = led_audio_get_metrics();
-    const float energy_scale = binding.effect.audio_link ? audio_mod : 0.5f + 0.5f * sinf(frame_idx * 0.1f);
+    const float energy_scale = binding.effect.audio_link ? audio_mod : 0.5f + 0.5f * sinf(normalized_time * 0.1f);
     const float center = pixels * 0.5f;
     const float spread = pixels * 0.4f * intensity;
     
@@ -768,7 +765,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   // Beat Pulse effect (WLED style - NOT audio-reactive)
   if (effect_name.find("beat") != std::string::npos && effect_name.find("pulse") != std::string::npos) {
     // WLED effects are not audio-reactive - use time-based animation
-    const float beat_strength = 0.5f + 0.5f * sinf(frame_idx * 0.2f);
+    const float beat_strength = 0.5f + 0.5f * sinf(normalized_time * 0.2f);
     const float pulse = 0.3f + beat_strength * 0.7f;
     const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, 0.5f);
     for (uint16_t i = 0; i < pixels; ++i) {
@@ -789,7 +786,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
       const uint16_t bar_idx = static_cast<uint16_t>(pos * bar_count);
       
       // WLED effects are not audio-reactive - use time-based animation
-      const float level = 0.5f + 0.5f * sinf((frame_idx * 0.1f) + (bar_idx * 0.5f));
+      const float level = 0.5f + 0.5f * sinf((normalized_time * 0.1f) + (bar_idx * 0.5f));
       
       const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
       *dst++ = to_byte(base.r * brightness * level);
@@ -802,8 +799,8 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   // Power+ / Energy Flow (WLED style - NOT audio-reactive)
   if (effect_name.find("power") != std::string::npos || effect_name.find("energy") != std::string::npos) {
     // WLED effects are not audio-reactive - use time-based animation
-    const float energy_val = 0.5f + 0.5f * sinf(frame_idx * 0.15f);
-    const float move = frame_idx * speed * 0.8f * direction;
+    const float energy_val = 0.5f + 0.5f * sinf(normalized_time * 0.15f);
+    const float move = normalized_time * speed * 0.8f * direction;
     
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
@@ -831,8 +828,8 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
       const float fire_base = pos * 2.0f - 1.0f;
       const float fire_height = 1.0f - std::abs(fire_base);
       
-      const float noise1 = sinf((frame_idx * speed * 0.2f) + (pos * 6.0f)) * 0.5f + 0.5f;
-      const float noise2 = sinf((frame_idx * speed * 0.3f) + (pos * 10.0f)) * 0.3f + 0.7f;
+      const float noise1 = sinf((normalized_time * speed * 0.2f) + (pos * 6.0f)) * 0.5f + 0.5f;
+      const float noise2 = sinf((normalized_time * speed * 0.3f) + (pos * 10.0f)) * 0.3f + 0.7f;
       const float fire_noise = (noise1 * 0.6f + noise2 * 0.4f);
       
       float fire_level = fire_height * fire_noise * intensity;
@@ -856,7 +853,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
 
   // Meteor effect (WLED)
   if (effect_name.find("meteor") != std::string::npos && effect_name.find("smooth") == std::string::npos) {
-    const float move = frame_idx * speed * 0.6f * direction;
+    const float move = normalized_time * speed * 0.6f * direction;
     const float meteor_count = 1.0f + intensity * 2.0f;
     
     for (uint16_t i = 0; i < pixels; ++i) {
@@ -883,7 +880,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
 
   // Meteor Smooth effect (WLED)
   if (effect_name.find("meteor") != std::string::npos && effect_name.find("smooth") != std::string::npos) {
-    const float move = frame_idx * speed * 0.5f * direction;
+    const float move = normalized_time * speed * 0.5f * direction;
     const float meteor_count = 1.0f + intensity * 2.0f;
     
     for (uint16_t i = 0; i < pixels; ++i) {
@@ -916,7 +913,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     }
     
     // WLED effects are not audio-reactive - use time-based ripple generation
-    const float simulated_beat = 0.5f + 0.5f * sinf(frame_idx * 0.2f);
+    const float simulated_beat = 0.5f + 0.5f * sinf(normalized_time * 0.2f);
     if (simulated_beat > 0.5f) {
       const float center = static_cast<float>(esp_random()) / 0xFFFFFFFF;
       ripples[static_cast<size_t>(center * pixels)] = 1.0f;
@@ -950,7 +947,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
 
   // Chase / Theater chase (WLED - NOT audio-reactive)
   if (effect_name.find("chase") != std::string::npos || effect_name.find("theater") != std::string::npos) {
-    const float move = frame_idx * speed * 0.8f * direction;
+    const float move = normalized_time * speed * 0.8f * direction;
     const float spacing = 0.2f + (1.0f - intensity) * 0.3f;
     
     for (uint16_t i = 0; i < pixels; ++i) {
@@ -969,7 +966,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
 
   // Scanner / Larson scanner (WLED - NOT audio-reactive)
   if (effect_name.find("scanner") != std::string::npos) {
-    const float move = frame_idx * speed * 0.5f * direction;
+    const float move = normalized_time * speed * 0.5f * direction;
     const float center = std::fmod(move, 2.0f) - 1.0f;  // -1 to 1
     const float width = 0.15f + intensity * 0.1f;
     
@@ -1059,19 +1056,17 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   // This ensures we always render something visible
   if (effect_name.empty() || effect_name == "none") {
     // If no effect specified, render a simple solid color with slight animation
-    const float pulse = 0.8f + 0.2f * sinf(frame_idx * speed * 0.5f);
+    const float pulse = 0.8f + 0.2f * sinf(normalized_time * speed * 0.5f);
     for (uint16_t i = 0; i < pixels; ++i) {
       *dst++ = to_byte(c1.r * brightness * pulse);
       *dst++ = to_byte(c1.g * brightness * pulse);
       *dst++ = to_byte(c1.b * brightness * pulse);
     }
-    if (frame_idx % 300 == 0) {
-      ESP_LOGW(TAG, "No effect name specified, rendering default solid color");
-    }
+    // Note: frame_idx-based logging removed (frame_idx no longer available in render_frame)
     return frame;
   }
   
-  const float move = frame_idx * speed * 0.5f * direction;
+  const float move = normalized_time * speed * 0.5f * direction;
   for (uint16_t i = 0; i < pixels; ++i) {
     const float pos = static_cast<float>(i) / static_cast<float>(pixels);
     float t = pos + move;
@@ -1100,15 +1095,15 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   }
   
   // Warn if effect was not recognized (reached default fallback)
-  if (frame_idx % 300 == 0) {
-    ESP_LOGW(TAG, "Effect '%s' not recognized, using default gradient flow", binding.effect.effect.c_str());
-  }
+  // Note: frame_idx-based logging removed (frame_idx no longer available in render_frame)
+  // ESP_LOGW(TAG, "Effect '%s' not recognized, using default gradient flow", binding.effect.effect.c_str());
   return frame;
 }
 
 bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
                                          const WledDeviceConfig& device,
                                          const std::string& ip,
+                                         float time_s,
                                          uint32_t frame_idx,
                                          uint8_t global_brightness,
                                          uint16_t fps) {
@@ -1117,8 +1112,8 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
     return false;
   }
   
-  // Frame cache: reuse frame if same effect + same LED count + same frame_idx
-  // This is especially useful when same effect is used on multiple devices
+  // Frame cache: reuse frame if same effect + same LED count + same frame_idx (for caching only)
+  // Note: frame_idx is used for cache key but animation uses time_s for consistent speed
   const uint16_t leds = device.leds == 0 ? 60 : device.leds;
   FrameCacheKey cache_key{binding.effect.effect, leds, frame_idx};
   std::vector<uint8_t> frame;
@@ -1127,8 +1122,8 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   if (cache_it != frame_cache_.end()) {
     frame = cache_it->second;  // Reuse cached frame
   } else {
-    // Render new frame and cache it
-    frame = render_frame(binding, leds, frame_idx, global_brightness, fps);
+    // Render new frame and cache it (using time_s for animation, frame_idx for cache key)
+    frame = render_frame(binding, leds, time_s, global_brightness, fps);
     
     // Verify frame is not empty (all zeros)
     bool frame_empty = true;
@@ -1138,7 +1133,7 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
         break;
       }
     }
-    if (frame_empty && frame_idx % 300 == 0) {
+    if (frame_empty) {  // Note: frame_idx-based logging removed
       const float intensity_val = binding.effect.intensity / 255.0f;
       ESP_LOGW(TAG, "Rendered frame is empty (all zeros) for effect '%s' on device %s (brightness=%.2f, intensity=%.2f)",
                binding.effect.effect.c_str(), device.id.c_str(), 
@@ -1196,14 +1191,13 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   }
   
   if (!ok) {
-    if (frame_idx % 60 == 0) {  // Log every 60 frames (~1 second at 60fps) to avoid spam
-      ESP_LOGW(TAG, "DDP send failed -> %s:%u (device %s, effect: %s, enabled=%d, ddp=%d, active=%d)", 
-               ip.c_str(), port, device.id.c_str(), binding.effect.effect.c_str(),
-               binding.enabled ? 1 : 0, binding.ddp ? 1 : 0, device.active ? 1 : 0);
-    }
+    // Log failure (rate-limited in task_loop using frame_idx)
+    ESP_LOGW(TAG, "DDP send failed -> %s:%u (device %s, effect: %s, enabled=%d, ddp=%d, active=%d)", 
+             ip.c_str(), port, device.id.c_str(), binding.effect.effect.c_str(),
+             binding.enabled ? 1 : 0, binding.ddp ? 1 : 0, device.active ? 1 : 0);
     // Invalidate cache on failure
     ddp_addr_cache_.erase(ip);
-    } else if (frame_idx % 300 == 0) {  // Log success every 5 seconds for debugging
+  } else if (frame_idx % 300 == 0) {  // Log success every 5 seconds for debugging (frame_idx available in render_and_send)
     // Check if frame has any non-zero data
     bool has_data = false;
     for (size_t i = 0; i < frame.size() && i < 9; ++i) {  // Check first 3 pixels
@@ -1224,7 +1218,8 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
 }
 
 void WledEffectsRuntime::task_loop() {
-  uint32_t frame_idx = 0;
+  uint32_t frame_idx = 0;  // Frame counter for logging/debugging only
+  uint64_t start_time_us = esp_timer_get_time();  // Start time for time-based animation
   // Variables for future use (audio sync timing, performance monitoring)
   // [[maybe_unused]] uint64_t last_audio_timestamp_us = 0;
   // [[maybe_unused]] uint64_t last_render_time_us = 0;
@@ -1409,7 +1404,9 @@ void WledEffectsRuntime::task_loop() {
       if (frame_idx == 0 || frame_idx % 1800 == 0) {  // Check every 30 seconds at 60fps
         enable_wled_ddp_mode(ip);
       }
-      const bool ok = render_and_send(binding, dev, ip, frame_idx, global_brightness, fps);
+      // Calculate time in seconds since start for time-based animation
+      const float time_s = static_cast<float>(esp_timer_get_time() - start_time_us) / 1'000'000.0f;
+      const bool ok = render_and_send(binding, dev, ip, time_s, frame_idx, global_brightness, fps);
       if (ok && frame_idx % 300 == 0) {  // Log success every 5 seconds
         ESP_LOGI(TAG, "Successfully rendering effect '%s' to device %s (%s:%u, enabled=%d, ddp=%d)", 
                  binding.effect.effect.c_str(), binding.device_id.c_str(), ip.c_str(), 
@@ -1502,7 +1499,9 @@ void WledEffectsRuntime::task_loop() {
         if (cache_it != frame_cache_.end()) {
           frame = cache_it->second;
         } else {
-          frame = render_frame(local_binding, common_led_count, frame_idx, global_brightness, fps);
+          // Calculate time in seconds since start for time-based animation
+          const float time_s = static_cast<float>(esp_timer_get_time() - start_time_us) / 1'000'000.0f;
+          frame = render_frame(local_binding, common_led_count, time_s, global_brightness, fps);
           if (frame_cache_.size() < 10) {
             frame_cache_[cache_key] = frame;
           }
@@ -1565,7 +1564,9 @@ void WledEffectsRuntime::task_loop() {
         fake.device_id = vseg.id;
         fake.effect = vseg.effect;
         fake.audio_channel = "mix";
-        const auto frame = render_frame(fake, static_cast<uint16_t>(total_leds), frame_idx, global_brightness, fps);
+        // Calculate time in seconds since start for time-based animation
+        const float time_s = static_cast<float>(esp_timer_get_time() - start_time_us) / 1'000'000.0f;
+        const auto frame = render_frame(fake, static_cast<uint16_t>(total_leds), time_s, global_brightness, fps);
         size_t cursor = 0;
         for (const auto& m : vseg.members) {
           uint16_t length = m.length;

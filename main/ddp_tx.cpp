@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <cerrno>
 
 static const char* TAG = "ddp";
 
@@ -16,14 +17,18 @@ static uint64_t s_tx_bytes = 0;
 static uint64_t s_rx_bytes = 0;  // For future use (audio receive)
 
 #pragma pack(push, 1)
+// DDP Header structure (14 bytes - standard DDP format)
+// WLED supports standard 14-byte DDP header (timecode field is present but ignored by WLED)
 struct DDPHeader {
-    uint8_t flags;       // 0x41 = push + ver
-    uint8_t seq;         // 0..255
-    uint16_t data_type;  // 0x0000 = raw
-    uint32_t channel;    // 1
-    uint32_t data_offset;// 0
-    uint16_t data_len;   // payload bytes
-    uint16_t unused;     // 0
+    uint8_t flags;       // Bit 0: push (1=push, 0=hold), Bit 1: query, Bits 2-3: version (01=v1)
+                         // 0x41 = push(1) + version(01) = 01000001
+    uint8_t seq;         // Sequence number (0..255)
+    uint16_t data_type;  // 0x0000 = RGB/RGBW raw data (big-endian)
+    uint32_t channel;    // Destination ID / Channel (1-based, big-endian)
+    uint32_t data_offset;// Data offset in bytes (big-endian)
+    uint16_t data_len;   // Payload length in bytes (big-endian)
+    // Note: Timecode (4 bytes) is optional and WLED ignores it, so we omit it
+    // Total: 1 + 1 + 2 + 4 + 4 + 2 = 14 bytes
 };
 #pragma pack(pop)
 
@@ -42,24 +47,40 @@ bool ddp_send_frame_internal(const struct sockaddr* addr,
         ESP_LOGE(TAG, "Unable to create UDP socket");
         return false;
     }
+    
+    // Ensure port is set in address (for cached addresses, port might not be set)
+    struct sockaddr_storage addr_with_port;
+    std::memcpy(&addr_with_port, addr, addr_len);
+    if (addr->sa_family == AF_INET) {
+        reinterpret_cast<struct sockaddr_in*>(&addr_with_port)->sin_port = htons(port);
+    } else if (addr->sa_family == AF_INET6) {
+        reinterpret_cast<struct sockaddr_in6*>(&addr_with_port)->sin6_port = htons(port);
+    }
+    const struct sockaddr* final_addr = reinterpret_cast<const struct sockaddr*>(&addr_with_port);
 
     std::vector<uint8_t> buf(sizeof(DDPHeader) + bytes);
     auto* h = reinterpret_cast<DDPHeader*>(buf.data());
+    
+    // Set DDP header fields
+    // Flags: 0x41 = push(1) + version(01) = 01000001 binary
+    // This ensures WLED displays the data immediately (push flag set)
     h->flags = 0x41;
     h->seq = seq;
-    h->data_type = htons(0x0000);
+    h->data_type = htons(0x0000);  // 0x0000 = RGB/RGBW raw data
     h->channel = htonl(channel);
     h->data_offset = htonl(data_offset);
     h->data_len = htons(static_cast<uint16_t>(bytes));
-    h->unused = 0;
 
     if (bytes > 0 && payload) {
+        // Copy RGB data from render buffer to DDP payload
+        // Payload format: RGB bytes (R, G, B, R, G, B, ...)
         memcpy(buf.data() + sizeof(DDPHeader), payload, bytes);
     }
 
-    int sent = sendto(sock, buf.data(), buf.size(), 0, addr, addr_len);
+    // Send DDP packet with proper port set
+    int sent = sendto(sock, buf.data(), buf.size(), 0, final_addr, addr_len);
     if (sent < 0) {
-        ESP_LOGE(TAG, "DDP send error");
+        ESP_LOGE(TAG, "DDP send error (errno=%d)", errno);
         close(sock);
         return false;
     }
@@ -67,6 +88,11 @@ bool ddp_send_frame_internal(const struct sockaddr* addr,
     // Track bytes sent
     if (sent > 0) {
         s_tx_bytes += static_cast<uint64_t>(sent);
+    }
+
+    // Verify packet was sent completely
+    if (sent != static_cast<int>(buf.size())) {
+        ESP_LOGW(TAG, "DDP partial send: %d/%zu bytes", sent, buf.size());
     }
 
     close(sock);
@@ -129,6 +155,14 @@ bool ddp_cache_resolve(const std::string& host, uint16_t port, struct sockaddr_s
     if (res->ai_addrlen <= sizeof(*out_addr)) {
         std::memcpy(out_addr, res->ai_addr, res->ai_addrlen);
         *out_addr_len = res->ai_addrlen;
+        
+        // Ensure port is explicitly set in cached address
+        if (res->ai_family == AF_INET) {
+            reinterpret_cast<struct sockaddr_in*>(out_addr)->sin_port = htons(port);
+        } else if (res->ai_family == AF_INET6) {
+            reinterpret_cast<struct sockaddr_in6*>(out_addr)->sin6_port = htons(port);
+        }
+        
         freeaddrinfo(res);
         return true;
     }

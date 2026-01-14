@@ -165,7 +165,7 @@ Rgb sample_gradient(const std::vector<GradientStop>& stops, float t) {
 std::vector<uint8_t> render_effect(const std::string& effect_name,
                                     const EffectAssignment& effect,
                                     uint16_t led_count,
-                                    uint32_t frame_idx,
+                                    float time_s,
                                     uint8_t global_brightness,
                                     uint16_t fps,
                                     const std::vector<GradientStop>& gradient,
@@ -181,6 +181,9 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
   std::vector<uint8_t> frame(pixels * 3, 0);
   uint8_t* dst = frame.data();
   
+  // Normalize time: convert time-based animation (assuming 60fps baseline)
+  const float normalized_time = time_s * 60.0f;
+  
   const std::string name_lower = lower_copy(effect_name);
   AudioMetrics metrics = led_audio_get_metrics();
 
@@ -194,9 +197,9 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
       const float fire_height = 1.0f - std::abs(fire_base);
       
       // Fire noise using multiple sine waves
-      const float noise1 = sinf((frame_idx * speed * 0.3f) + (pos * 8.0f)) * 0.5f + 0.5f;
-      const float noise2 = sinf((frame_idx * speed * 0.5f) + (pos * 12.0f)) * 0.3f + 0.7f;
-      const float noise3 = sinf((frame_idx * speed * 0.7f) + (pos * 6.0f)) * 0.2f + 0.8f;
+      const float noise1 = sinf((normalized_time * speed * 0.3f) + (pos * 8.0f)) * 0.5f + 0.5f;
+      const float noise2 = sinf((normalized_time * speed * 0.5f) + (pos * 12.0f)) * 0.3f + 0.7f;
+      const float noise3 = sinf((normalized_time * speed * 0.7f) + (pos * 6.0f)) * 0.2f + 0.8f;
       const float fire_noise = (noise1 * 0.4f + noise2 * 0.4f + noise3 * 0.2f);
       
       // Fire color gradient: red at bottom, orange/yellow in middle, white at top
@@ -265,7 +268,7 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
 
   // Waves effect (smooth rolling waves) - LEDFx style
   if (name_lower.find("wave") != std::string::npos && name_lower.find("energy") == std::string::npos) {
-    const float move = frame_idx * speed * 0.3f * direction;
+    const float move = normalized_time * speed * 0.3f * direction;
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
       const float wave1 = sinf((pos * 3.0f + move) * 6.2831f) * 0.5f + 0.5f;
@@ -282,7 +285,7 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
 
   // Plasma effect (animated gradients) - LEDFx style
   if (name_lower.find("plasma") != std::string::npos) {
-    const float move = frame_idx * speed * 0.2f;
+    const float move = normalized_time * speed * 0.2f;
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
       const float x = pos * 8.0f;
@@ -366,11 +369,11 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
 
   // Aura effect - LEDFx style
   if (name_lower.find("aura") != std::string::npos) {
-    const float move = frame_idx * speed * 0.15f;
+    const float move = normalized_time * speed * 0.15f;
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
       const float aura = sinf((pos * 2.0f + move) * 6.2831f) * 0.3f + 0.7f;
-      const float pulse = 0.6f + sinf(frame_idx * 0.1f) * 0.4f;
+      const float pulse = 0.6f + sinf(normalized_time * 0.1f) * 0.4f;
       
       const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
       *dst++ = to_byte(base.r * brightness * aura * pulse * audio_mod);
@@ -382,7 +385,7 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
 
   // Hyperspace effect - LEDFx style
   if (name_lower.find("hyperspace") != std::string::npos) {
-    const float move = frame_idx * speed * 1.2f * direction;
+    const float move = normalized_time * speed * 1.2f * direction;
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
       float t = std::fmod(pos + move, 1.0f);

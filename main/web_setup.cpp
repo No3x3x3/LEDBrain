@@ -19,6 +19,7 @@
 #include "wifi_c6_ctrl.hpp"
 #include "wifi_c6.hpp"
 #include "ddp_tx.hpp"
+#include "temperature_monitor.hpp"
 #include "esp_wifi_types.h"
 #include "esp_netif.h"
 #include "lwip/netif.h"
@@ -366,6 +367,13 @@ static esp_err_t api_info(httpd_req_t* req){
   
   cJSON_AddNumberToObject(root, "network_tx_rate", tx_rate);
   cJSON_AddNumberToObject(root, "network_rx_rate", rx_rate);
+  
+  // CPU temperature (TSENS)
+  float cpu_temp = 0.0f;
+  if (temperature_monitor_get_cpu_temp(&cpu_temp) == ESP_OK) {
+    cJSON_AddNumberToObject(root, "cpu_temp_celsius", cpu_temp);
+  }
+  
   // uptime
   uint64_t us = esp_timer_get_time();
   cJSON_AddNumberToObject(root,"uptime_s", (int)(us/1000000ULL));

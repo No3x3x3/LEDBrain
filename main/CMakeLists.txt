@@ -15,6 +15,7 @@ idf_component_register(
       "wled_effects.cpp"
       "ledfx_effects.cpp"
       "ota.cpp"
+      "temperature_monitor.cpp"
   INCLUDE_DIRS "."
   EMBED_FILES 
       "spiffs/index.html"

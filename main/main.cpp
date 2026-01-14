@@ -10,6 +10,7 @@
 #include "wled_discovery.hpp"
 #include "wled_effects.hpp"
 #include "snapclient_light.hpp"
+#include "temperature_monitor.hpp"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -30,6 +31,12 @@ extern "C" void app_main(void) {
   ESP_ERROR_CHECK(esp_netif_init());
   ESP_ERROR_CHECK(esp_event_loop_create_default());
   ESP_ERROR_CHECK(config_service_init());
+  
+  // Initialize temperature monitoring (TSENS for ESP32-P4)
+  esp_err_t temp_init = temperature_monitor_init();
+  if (temp_init != ESP_OK) {
+    ESP_LOGW(TAG, "Temperature monitor init failed: %s (continuing without temperature monitoring)", esp_err_to_name(temp_init));
+  }
 
   ESP_ERROR_CHECK(config_load(s_cfg));
 
