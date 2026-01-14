@@ -53,19 +53,31 @@ esp_err_t temperature_monitor_init() {
 
 esp_err_t temperature_monitor_get_cpu_temp(float* temp_celsius) {
     if (!s_initialized || s_temp_sensor == nullptr) {
+        ESP_LOGW(TAG, "Temperature sensor not initialized (initialized=%d, sensor=%p)", 
+                 s_initialized ? 1 : 0, s_temp_sensor);
         return ESP_ERR_INVALID_STATE;
     }
 
     if (temp_celsius == nullptr) {
+        ESP_LOGE(TAG, "Invalid argument: temp_celsius is null");
         return ESP_ERR_INVALID_ARG;
     }
 
     esp_err_t ret = temperature_sensor_get_celsius(s_temp_sensor, temp_celsius);
     if (ret == ESP_OK) {
         s_last_temperature = *temp_celsius;
+        ESP_LOGI(TAG, "Temperature read: %.2f°C", *temp_celsius);
     } else {
-        // Return last known temperature if read fails
-        *temp_celsius = s_last_temperature;
+        // Return last known temperature if read fails (but only if we have a valid previous reading)
+        if (s_last_temperature > 0.0f) {
+            *temp_celsius = s_last_temperature;
+            ESP_LOGW(TAG, "Temperature read failed: %s, using last known: %.2f°C", 
+                     esp_err_to_name(ret), s_last_temperature);
+        } else {
+            *temp_celsius = -1.0f;
+            ESP_LOGW(TAG, "Temperature read failed: %s, no previous reading available", 
+                     esp_err_to_name(ret));
+        }
     }
 
     return ret;

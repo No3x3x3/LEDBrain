@@ -23,10 +23,15 @@
 #include "esp_wifi_types.h"
 #include "esp_netif.h"
 #include "lwip/netif.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <string>
 #include <algorithm>
 #include <cctype>
 #include <vector>
+#include <deque>
+#include <mutex>
 
 extern const unsigned char index_html_start[] asm("_binary_index_html_start");
 extern const unsigned char index_html_end[]   asm("_binary_index_html_end");
@@ -40,6 +45,103 @@ extern const unsigned char lang_en_json_start[] asm("_binary_lang_en_json_start"
 extern const unsigned char lang_en_json_end[]   asm("_binary_lang_en_json_end");
 
 static const char* TAG="web";
+
+// Log buffer for remote diagnostics
+namespace {
+  constexpr size_t MAX_LOG_ENTRIES = 500;
+  constexpr size_t MAX_LOG_LINE_LENGTH = 256;
+  
+  struct LogEntry {
+    uint64_t timestamp_us;
+    esp_log_level_t level;
+    char tag[16];
+    char message[MAX_LOG_LINE_LENGTH];
+  };
+  
+  std::deque<LogEntry> log_buffer;
+  std::mutex log_buffer_mutex;
+  vprintf_like_t original_vprintf = nullptr;
+  
+  int log_vprintf_hook(const char* format, va_list args) {
+    // Call original vprintf first
+    if (original_vprintf) {
+      original_vprintf(format, args);
+    }
+    
+    // Extract log level and tag from format (ESP-IDF log format: "TAG: message")
+    // This is a simplified parser - ESP-IDF logs have format: "[level] TAG: message"
+    char buffer[MAX_LOG_LINE_LENGTH];
+    int len = vsnprintf(buffer, sizeof(buffer), format, args);
+    if (len < 0 || len >= static_cast<int>(sizeof(buffer))) {
+      len = sizeof(buffer) - 1;
+      buffer[len] = '\0';
+    }
+    
+    // Try to parse ESP-IDF log format: "[level] TAG: message"
+    esp_log_level_t level = ESP_LOG_INFO;
+    const char* tag_start = nullptr;
+    const char* message_start = buffer;
+    
+    // Check for level prefix
+    if (buffer[0] == '[') {
+      const char* level_end = strchr(buffer, ']');
+      if (level_end) {
+        // Parse level
+        if (strncmp(buffer, "[E]", 3) == 0) level = ESP_LOG_ERROR;
+        else if (strncmp(buffer, "[W]", 3) == 0) level = ESP_LOG_WARN;
+        else if (strncmp(buffer, "[I]", 3) == 0) level = ESP_LOG_INFO;
+        else if (strncmp(buffer, "[D]", 3) == 0) level = ESP_LOG_DEBUG;
+        else if (strncmp(buffer, "[V]", 3) == 0) level = ESP_LOG_VERBOSE;
+        
+        tag_start = level_end + 1;
+        while (*tag_start == ' ') tag_start++;  // Skip spaces
+        message_start = strchr(tag_start, ':');
+        if (message_start) {
+          message_start++;  // Skip ':'
+          while (*message_start == ' ') message_start++;  // Skip spaces
+        } else {
+          message_start = tag_start;
+        }
+      }
+    }
+    
+    // Extract tag (up to 15 chars before ':')
+    char tag[16] = {0};
+    if (tag_start && message_start > tag_start) {
+      size_t tag_len = message_start - tag_start - 1;  // -1 for ':'
+      if (tag_len > 15) tag_len = 15;
+      strncpy(tag, tag_start, tag_len);
+      tag[tag_len] = '\0';
+    } else {
+      strncpy(tag, "unknown", sizeof(tag) - 1);
+    }
+    
+    // Store log entry
+    {
+      std::lock_guard<std::mutex> lock(log_buffer_mutex);
+      LogEntry entry;
+      entry.timestamp_us = esp_timer_get_time();
+      entry.level = level;
+      strncpy(entry.tag, tag, sizeof(entry.tag) - 1);
+      entry.tag[sizeof(entry.tag) - 1] = '\0';
+      strncpy(entry.message, message_start ? message_start : buffer, sizeof(entry.message) - 1);
+      entry.message[sizeof(entry.message) - 1] = '\0';
+      
+      log_buffer.push_back(entry);
+      if (log_buffer.size() > MAX_LOG_ENTRIES) {
+        log_buffer.pop_front();
+      }
+    }
+    
+    return len;
+  }
+  
+  void init_log_buffer() {
+    if (!original_vprintf) {
+      original_vprintf = esp_log_set_vprintf(log_vprintf_hook);
+    }
+  }
+}
 
 static esp_err_t send_mem(httpd_req_t* req, const unsigned char* begin, const unsigned char* end, const char* type){
   httpd_resp_set_type(req, type);
@@ -284,6 +386,223 @@ static esp_err_t api_factory_reset(httpd_req_t* req) {
   return ESP_OK;
 }
 
+// Get CPU usage for both cores (0 and 1)
+// Returns usage as percentage (0-100) for each core
+// Uses FreeRTOS task runtime statistics
+static void get_cpu_usage(float* core0_usage, float* core1_usage) {
+  // Static variables to track previous measurements
+  static uint32_t last_idle_runtime_core0 = 0;
+  static uint32_t last_idle_runtime_core1 = 0;
+  static uint64_t last_measurement_time_us = 0;
+  
+  // Initialize to -1 (invalid/unavailable)
+  *core0_usage = -1.0f;
+  *core1_usage = -1.0f;
+  
+  // Get task count
+  UBaseType_t num_tasks = uxTaskGetNumberOfTasks();
+  if (num_tasks == 0) {
+    return;
+  }
+  
+  // Allocate buffer for task states
+  TaskStatus_t* task_array = static_cast<TaskStatus_t*>(pvPortMalloc(num_tasks * sizeof(TaskStatus_t)));
+  if (!task_array) {
+    return;
+  }
+  
+  // Get task states (requires configUSE_TRACE_FACILITY and configGENERATE_RUN_TIME_STATS)
+  UBaseType_t actual_count = uxTaskGetSystemState(task_array, num_tasks, nullptr);
+  
+  if (actual_count == 0) {
+    vPortFree(task_array);
+    return;
+  }
+  
+  // Check if runtime stats are available (ulRunTimeCounter will be 0 if not enabled)
+  bool runtime_stats_available = false;
+  for (UBaseType_t i = 0; i < actual_count; ++i) {
+    if (task_array[i].ulRunTimeCounter > 0) {
+      runtime_stats_available = true;
+      break;
+    }
+  }
+  
+  if (!runtime_stats_available) {
+    vPortFree(task_array);
+    return;  // Runtime stats not available
+  }
+  
+  // Find idle tasks for each core
+  // ESP32-P4 has two idle tasks: "IDLE0" (Core 0) and "IDLE1" (Core 1)
+  uint32_t idle_runtime_core0 = 0;
+  uint32_t idle_runtime_core1 = 0;
+  
+  for (UBaseType_t i = 0; i < actual_count; ++i) {
+    const char* task_name = task_array[i].pcTaskName;
+    uint32_t runtime = task_array[i].ulRunTimeCounter;
+    
+    // ESP32-P4 idle tasks are named "IDLE" or "IDLE0"/"IDLE1"
+    // Check for Core 0 idle task
+    if (strcmp(task_name, "IDLE") == 0 || strcmp(task_name, "IDLE0") == 0 || 
+        (strstr(task_name, "IDLE") != nullptr && strstr(task_name, "0") != nullptr)) {
+      idle_runtime_core0 = runtime;
+    }
+    // Check for Core 1 idle task
+    else if (strcmp(task_name, "IDLE1") == 0 || 
+             (strstr(task_name, "IDLE") != nullptr && strstr(task_name, "1") != nullptr && 
+              strstr(task_name, "0") == nullptr)) {
+      idle_runtime_core1 = runtime;
+    }
+  }
+  
+  // If we didn't find separate idle tasks, try to find single "IDLE" task
+  // In that case, we can't distinguish between cores, so we'll split it
+  if (idle_runtime_core0 == 0 && idle_runtime_core1 == 0) {
+    for (UBaseType_t i = 0; i < actual_count; ++i) {
+      const char* task_name = task_array[i].pcTaskName;
+      if (strstr(task_name, "IDLE") != nullptr || strstr(task_name, "idle") != nullptr) {
+        // Split idle time evenly between cores (fallback)
+        idle_runtime_core0 = task_array[i].ulRunTimeCounter / 2;
+        idle_runtime_core1 = task_array[i].ulRunTimeCounter / 2;
+        break;
+      }
+    }
+  }
+  
+  uint64_t current_time_us = esp_timer_get_time();
+  
+  // Calculate usage based on change in idle runtime over time
+  // CPU usage = 100% - (idle_time / total_time) * 100%
+  if (last_measurement_time_us > 0 && current_time_us > last_measurement_time_us) {
+    uint64_t time_delta_us = current_time_us - last_measurement_time_us;
+    double time_delta_s = static_cast<double>(time_delta_us) / 1'000'000.0;
+    
+    if (time_delta_s > 0.5 && time_delta_s < 10.0) {  // Valid time window (0.5s to 10s)
+      // Calculate idle time delta for each core
+      uint32_t idle_delta_core0 = 0;
+      uint32_t idle_delta_core1 = 0;
+      
+      if (idle_runtime_core0 >= last_idle_runtime_core0) {
+        idle_delta_core0 = idle_runtime_core0 - last_idle_runtime_core0;
+      }
+      if (idle_runtime_core1 >= last_idle_runtime_core1) {
+        idle_delta_core1 = idle_runtime_core1 - last_idle_runtime_core1;
+      }
+      
+      // Convert ticks to percentage
+      float ticks_per_second = 1000.0f;  // Default: 1000 Hz (1ms per tick)
+      #ifdef portTICK_PERIOD_MS
+      if (portTICK_PERIOD_MS > 0) {
+        ticks_per_second = 1000.0f / static_cast<float>(portTICK_PERIOD_MS);
+      }
+      #endif
+      float max_possible_ticks = ticks_per_second * time_delta_s;
+      
+      if (max_possible_ticks > 0) {
+        // Calculate idle percentage, then convert to usage percentage
+        // Usage = 100% - idle_percentage
+        float idle_percent_core0 = (static_cast<float>(idle_delta_core0) / max_possible_ticks) * 100.0f;
+        float idle_percent_core1 = (static_cast<float>(idle_delta_core1) / max_possible_ticks) * 100.0f;
+        
+        float usage_core0 = 100.0f - idle_percent_core0;
+        float usage_core1 = 100.0f - idle_percent_core1;
+        
+        *core0_usage = std::max(0.0f, std::min(100.0f, usage_core0));
+        *core1_usage = std::max(0.0f, std::min(100.0f, usage_core1));
+      }
+    }
+  }
+  
+  // Update static variables
+  last_idle_runtime_core0 = idle_runtime_core0;
+  last_idle_runtime_core1 = idle_runtime_core1;
+  last_measurement_time_us = current_time_us;
+  
+  vPortFree(task_array);
+}
+
+static esp_err_t api_logs(httpd_req_t* req) {
+  // Get query parameters
+  char query[64] = {0};
+  size_t query_len = httpd_req_get_url_query_len(req);
+  if (query_len > 0 && query_len < sizeof(query)) {
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+  }
+  
+  // Parse level filter (default: all levels)
+  esp_log_level_t min_level = ESP_LOG_VERBOSE;
+  char level_str[16] = {0};
+  if (httpd_query_key_value(query, "level", level_str, sizeof(level_str)) == ESP_OK) {
+    if (strcmp(level_str, "error") == 0) min_level = ESP_LOG_ERROR;
+    else if (strcmp(level_str, "warn") == 0) min_level = ESP_LOG_WARN;
+    else if (strcmp(level_str, "info") == 0) min_level = ESP_LOG_INFO;
+    else if (strcmp(level_str, "debug") == 0) min_level = ESP_LOG_DEBUG;
+  }
+  
+  // Parse tag filter
+  char tag_filter[32] = {0};
+  bool filter_by_tag = (httpd_query_key_value(query, "tag", tag_filter, sizeof(tag_filter)) == ESP_OK);
+  
+  // Parse limit (default: 100)
+  char limit_str[16] = {0};
+  size_t limit = 100;
+  if (httpd_query_key_value(query, "limit", limit_str, sizeof(limit_str)) == ESP_OK) {
+    int limit_val = atoi(limit_str);
+    if (limit_val > 0 && limit_val <= 1000) {
+      limit = static_cast<size_t>(limit_val);
+    }
+  }
+  
+  cJSON* root = cJSON_CreateObject();
+  cJSON* logs_array = cJSON_CreateArray();
+  
+  {
+    std::lock_guard<std::mutex> lock(log_buffer_mutex);
+    
+    // Iterate backwards (newest first) and filter
+    size_t added = 0;
+    for (auto it = log_buffer.rbegin(); it != log_buffer.rend() && added < limit; ++it) {
+      const LogEntry& entry = *it;
+      
+      // Filter by level
+      if (entry.level > min_level) {
+        continue;
+      }
+      
+      // Filter by tag
+      if (filter_by_tag && strstr(entry.tag, tag_filter) == nullptr) {
+        continue;
+      }
+      
+      cJSON* log_obj = cJSON_CreateObject();
+      cJSON_AddNumberToObject(log_obj, "timestamp", static_cast<double>(entry.timestamp_us) / 1000.0);  // milliseconds
+      cJSON_AddStringToObject(log_obj, "level", 
+        entry.level == ESP_LOG_ERROR ? "error" :
+        entry.level == ESP_LOG_WARN ? "warn" :
+        entry.level == ESP_LOG_INFO ? "info" :
+        entry.level == ESP_LOG_DEBUG ? "debug" : "verbose");
+      cJSON_AddStringToObject(log_obj, "tag", entry.tag);
+      cJSON_AddStringToObject(log_obj, "message", entry.message);
+      cJSON_AddItemToArray(logs_array, log_obj);
+      added++;
+    }
+    
+    cJSON_AddNumberToObject(root, "total", static_cast<double>(log_buffer.size()));
+    cJSON_AddNumberToObject(root, "returned", static_cast<double>(added));
+  }
+  
+  cJSON_AddItemToObject(root, "logs", logs_array);
+  
+  char* json_str = cJSON_PrintUnformatted(root);
+  httpd_resp_set_type(req, "application/json");
+  esp_err_t ret = httpd_resp_send(req, json_str, strlen(json_str));
+  free(json_str);
+  cJSON_Delete(root);
+  
+  return ret;
+}
+
 static esp_err_t api_info(httpd_req_t* req){
   // proste info JSON
   cJSON* root = cJSON_CreateObject();
@@ -371,11 +690,32 @@ static esp_err_t api_info(httpd_req_t* req){
   // CPU temperature (TSENS)
   float cpu_temp = 0.0f;
   esp_err_t temp_err = temperature_monitor_get_cpu_temp(&cpu_temp);
-  if (temp_err == ESP_OK) {
+  if (temp_err == ESP_OK && cpu_temp > -50.0f && cpu_temp < 150.0f) {  // Sanity check: reasonable temperature range
     cJSON_AddNumberToObject(root, "cpu_temp_celsius", cpu_temp);
+    ESP_LOGI(TAG, "API /info: CPU temperature = %.2f°C", cpu_temp);
   } else {
     // Always include the field, use -1 to indicate unavailable
     cJSON_AddNumberToObject(root, "cpu_temp_celsius", -1.0);
+    if (temp_err != ESP_OK) {
+      ESP_LOGW(TAG, "API /info: CPU temperature unavailable (err=%s)", esp_err_to_name(temp_err));
+    } else {
+      ESP_LOGW(TAG, "API /info: CPU temperature out of range: %.2f°C", cpu_temp);
+    }
+  }
+  
+  // CPU usage for both cores
+  float core0_usage = -1.0f;
+  float core1_usage = -1.0f;
+  get_cpu_usage(&core0_usage, &core1_usage);
+  cJSON* cpu_usage = cJSON_AddObjectToObject(root, "cpu_usage");
+  if (cpu_usage) {
+    // Only add if we have valid measurements (>= 0)
+    if (core0_usage >= 0.0f) {
+      cJSON_AddNumberToObject(cpu_usage, "core0", core0_usage);
+    }
+    if (core1_usage >= 0.0f) {
+      cJSON_AddNumberToObject(cpu_usage, "core1", core1_usage);
+    }
   }
   
   // uptime
@@ -1084,6 +1424,9 @@ void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime, WledEffectsRunt
   s_cfg = &cfg;
   s_led_runtime = runtime;
   s_wled_fx_runtime = wled_runtime;
+  
+  // Initialize log buffer for remote diagnostics
+  init_log_buffer();
   httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
   server_config.uri_match_fn = httpd_uri_match_wildcard;
   server_config.max_uri_handlers = 30;
@@ -1117,6 +1460,8 @@ void start_web_server(AppConfig& cfg, LedEngineRuntime* runtime, WledEffectsRunt
   httpd_register_uri_handler(server, &u_factory_reset);
   httpd_uri_t u_info = { .uri="/api/info", .method=HTTP_GET, .handler=api_info, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_info);
+  httpd_uri_t u_logs = { .uri="/api/logs", .method=HTTP_GET, .handler=api_logs, .user_ctx=NULL };
+  httpd_register_uri_handler(server, &u_logs);
   httpd_uri_t u_reboot = { .uri="/api/reboot", .method=HTTP_POST, .handler=api_reboot, .user_ctx=NULL };
   httpd_register_uri_handler(server, &u_reboot);
   httpd_uri_t u_wled_list = { .uri="/api/wled/list", .method=HTTP_GET, .handler=api_wled_list, .user_ctx=NULL };

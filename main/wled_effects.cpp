@@ -28,6 +28,8 @@ static const char* TAG = "wled_fx";
 static std::unordered_map<std::string, uint64_t> ddp_mode_enabled_cache;
 // Cache to store WLED state before enabling DDP mode (to restore later)
 static std::unordered_map<std::string, std::string> wled_state_cache;
+// Mutex to protect cache access (enable/disable can be called from different contexts)
+static std::mutex cache_mutex;
 
 std::string get_wled_state(const std::string& ip) {
   if (ip.empty()) {
@@ -83,25 +85,42 @@ void enable_wled_ddp_mode(const std::string& ip) {
     return;
   }
   
-  // Check cache - only enable DDP mode once per device every 5 minutes
   const uint64_t now_us = esp_timer_get_time();
-  auto it = ddp_mode_enabled_cache.find(ip);
-  if (it != ddp_mode_enabled_cache.end()) {
-    const uint64_t age_us = now_us - it->second;
-    if (age_us < 300'000'000ULL) {  // 5 minutes
-      return;  // Already enabled recently
+  
+  // Check cache - only enable DDP mode once per device every 5 minutes
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto it = ddp_mode_enabled_cache.find(ip);
+    if (it != ddp_mode_enabled_cache.end()) {
+      const uint64_t age_us = now_us - it->second;
+      if (age_us < 300'000'000ULL) {  // 5 minutes
+        // DDP already enabled recently, but ensure we have state cached
+        if (wled_state_cache.find(ip) == wled_state_cache.end()) {
+          // State not cached - this shouldn't happen, but save it now as fallback
+          std::string current_state = get_wled_state(ip);
+          if (!current_state.empty()) {
+            wled_state_cache[ip] = current_state;
+            ESP_LOGI(TAG, "Saved WLED state for %s (late save, DDP already enabled)", ip.c_str());
+          }
+        }
+        return;  // Already enabled recently
+      }
     }
   }
   
-  // First, save current WLED state before enabling DDP mode
-  // This allows us to restore it later when disabling DDP
-  if (wled_state_cache.find(ip) == wled_state_cache.end()) {
-    std::string current_state = get_wled_state(ip);
-    if (!current_state.empty()) {
-      wled_state_cache[ip] = current_state;
-      ESP_LOGI(TAG, "Saved WLED state for %s before enabling DDP", ip.c_str());
-    } else {
-      ESP_LOGW(TAG, "Failed to get WLED state for %s, will restore default state", ip.c_str());
+  // IMPORTANT: Always save current WLED state BEFORE enabling DDP mode
+  // This ensures we have the latest state to restore when disabling DDP
+  // We save it even if cache exists, to ensure we always have the most recent state
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    if (wled_state_cache.find(ip) == wled_state_cache.end()) {
+      std::string current_state = get_wled_state(ip);
+      if (!current_state.empty()) {
+        wled_state_cache[ip] = current_state;
+        ESP_LOGI(TAG, "Saved WLED state for %s before enabling DDP", ip.c_str());
+      } else {
+        ESP_LOGW(TAG, "Failed to get WLED state for %s, will restore default state", ip.c_str());
+      }
     }
   }
   
@@ -121,8 +140,9 @@ void enable_wled_ddp_mode(const std::string& ip) {
     return;
   }
   
-  // JSON payload: enable live mode (DDP receive) and turn off local effects
-  const char* json_payload = "{\"live\":true,\"on\":false}";
+  // JSON payload: enable live mode (DDP receive) and keep WLED on
+  // Note: "on":true ensures WLED displays DDP data, "live":true enables DDP receive mode
+  const char* json_payload = "{\"live\":true,\"on\":true}";
   esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
   esp_http_client_set_header(client, "Content-Type", "application/json");
   
@@ -131,6 +151,7 @@ void enable_wled_ddp_mode(const std::string& ip) {
     const int status_code = esp_http_client_get_status_code(client);
     if (status_code == 200) {
       ESP_LOGI(TAG, "Enabled DDP receive mode for WLED device: %s", ip.c_str());
+      std::lock_guard<std::mutex> lock(cache_mutex);
       ddp_mode_enabled_cache[ip] = now_us;
     } else {
       ESP_LOGW(TAG, "Failed to enable DDP mode for %s: HTTP %d", ip.c_str(), status_code);
@@ -148,12 +169,21 @@ void disable_wled_ddp_mode(const std::string& ip) {
   }
   
   bool restored = false;
+  std::string saved_state_json;
+  
+  // Get saved state from cache (with mutex protection)
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto state_it = wled_state_cache.find(ip);
+    if (state_it != wled_state_cache.end() && !state_it->second.empty()) {
+      saved_state_json = state_it->second;
+    }
+  }
   
   // Restore previous WLED state if we saved it
-  auto state_it = wled_state_cache.find(ip);
-  if (state_it != wled_state_cache.end() && !state_it->second.empty()) {
+  if (!saved_state_json.empty()) {
     // Parse saved state and restore it, but ensure live=false
-    cJSON* saved_state = cJSON_Parse(state_it->second.c_str());
+    cJSON* saved_state = cJSON_Parse(saved_state_json.c_str());
     if (saved_state) {
       // Ensure live mode is disabled
       cJSON* live = cJSON_GetObjectItem(saved_state, "live");
@@ -297,9 +327,12 @@ void disable_wled_ddp_mode(const std::string& ip) {
     }
   }
   
-  // Remove from caches
-  ddp_mode_enabled_cache.erase(ip);
-  wled_state_cache.erase(ip);
+  // Remove from caches (with mutex protection)
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    ddp_mode_enabled_cache.erase(ip);
+    wled_state_cache.erase(ip);
+  }
 }
 
 struct Rgb {
@@ -508,7 +541,10 @@ void WledEffectsRuntime::task_entry(void* arg) {
 }
 
 bool WledEffectsRuntime::should_run() const {
-  return !led_runtime_ || led_runtime_->enabled();
+  // WLED effects should run independently of local LED effects
+  // They can be enabled/disabled per device via binding.enabled
+  // Always return true - individual bindings control their own enabled state
+  return true;
 }
 
 bool WledEffectsRuntime::resolve_device(const std::string& device_id,
@@ -520,12 +556,12 @@ bool WledEffectsRuntime::resolve_device(const std::string& device_id,
     return cfg.id == device_id;
   });
   if (it == devices.end()) {
-    ESP_LOGD(TAG, "Device %s not found in devices list (%zu devices)", device_id.c_str(), devices.size());
+    ESP_LOGW(TAG, "Device %s not found in devices list (%zu devices)", device_id.c_str(), devices.size());
     return false;
   }
   out = *it;
   if (!out.active) {
-    ESP_LOGD(TAG, "Device %s is not active", device_id.c_str());
+    ESP_LOGW(TAG, "Device %s is not active (id=%s, address=%s)", device_id.c_str(), out.id.c_str(), out.address.c_str());
     return false;
   }
   for (const auto& st : status) {
@@ -533,17 +569,23 @@ bool WledEffectsRuntime::resolve_device(const std::string& device_id,
         (!st.config.address.empty() && st.config.address == out.address)) {
       if (!st.ip.empty()) {
         ip = st.ip;
+        ESP_LOGD(TAG, "Resolved device %s -> IP %s (from status)", device_id.c_str(), ip.c_str());
       }
       break;
     }
   }
   if (ip.empty()) {
     ip = out.address;
+    if (!ip.empty()) {
+      ESP_LOGD(TAG, "Resolved device %s -> IP %s (from config address)", device_id.c_str(), ip.c_str());
+    }
   }
   if (ip.empty()) {
-    ESP_LOGD(TAG, "Device %s has no IP address configured", device_id.c_str());
+    ESP_LOGW(TAG, "Device %s has no IP address configured (id=%s, address=%s, status_count=%zu)", 
+             device_id.c_str(), out.id.c_str(), out.address.c_str(), status.size());
+    return false;
   }
-  return !ip.empty();
+  return true;
 }
 
 std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& binding,
@@ -1151,7 +1193,9 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   if (cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0) {
     port = cfg_ref_->mqtt.ddp_port;
   }
-  const uint32_t channel = static_cast<uint32_t>(binding.segment_index == 0 ? 1 : binding.segment_index);
+  // WLED DDP channel mapping: segment_index 0 = channel 1, segment_index 1 = channel 2, etc.
+  // Channel must be 1-based (WLED requirement)
+  const uint32_t channel = static_cast<uint32_t>(binding.segment_index + 1);
   
   // Use cached address if available (faster than DNS resolution every time)
   const uint64_t now_us = esp_timer_get_time();
@@ -1194,25 +1238,26 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   
   if (!ok) {
     // Log failure (rate-limited in task_loop using frame_idx)
-    ESP_LOGW(TAG, "DDP send failed -> %s:%u (device %s, effect: %s, enabled=%d, ddp=%d, active=%d)", 
+    ESP_LOGW(TAG, "DDP send failed -> %s:%u (device %s, effect: %s, enabled=%d, ddp=%d, active=%d, leds=%u)", 
              ip.c_str(), port, device.id.c_str(), binding.effect.effect.c_str(),
-             binding.enabled ? 1 : 0, binding.ddp ? 1 : 0, device.active ? 1 : 0);
+             binding.enabled ? 1 : 0, binding.ddp ? 1 : 0, device.active ? 1 : 0, static_cast<unsigned>(leds));
     // Invalidate cache on failure
     ddp_addr_cache_.erase(ip);
-  } else if (frame_idx % 300 == 0) {  // Log success every 5 seconds for debugging (frame_idx available in render_and_send)
+  } else if (frame_idx % 60 == 0) {  // Log success every 1 second for debugging
     // Check if frame has any non-zero data
     bool has_data = false;
-    for (size_t i = 0; i < frame.size() && i < 9; ++i) {  // Check first 3 pixels
+    size_t non_zero_count = 0;
+    for (size_t i = 0; i < frame.size(); ++i) {
       if (frame[i] != 0) {
         has_data = true;
-        break;
+        non_zero_count++;
       }
     }
-    ESP_LOGI(TAG, "DDP send OK -> %s:%u (device %s, effect: %s, %u LEDs, channel %lu, has_data=%d, brightness=%.2f)", 
+    ESP_LOGI(TAG, "DDP send OK -> %s:%u (device %s, effect: %s, %u LEDs, channel %lu, has_data=%d, non_zero_bytes=%zu/%zu, brightness=%.2f)", 
              ip.c_str(), port, device.id.c_str(), binding.effect.effect.c_str(), 
              static_cast<unsigned>(device.leds == 0 ? 60 : device.leds),
              static_cast<unsigned long>(channel),
-             has_data ? 1 : 0,
+             has_data ? 1 : 0, non_zero_count, frame.size(),
              binding.effect.brightness_override > 0 ? binding.effect.brightness_override / 255.0f : binding.effect.brightness / 255.0f);
   }
   
@@ -1305,27 +1350,34 @@ void WledEffectsRuntime::task_loop() {
     }
     const auto status = wled_discovery_status();
     
-    // Track which devices have active DDP mode for cleanup when effects are stopped
-    static bool was_running = false;
-    const bool is_running = should_run();
+    // WLED effects run independently - check if any bindings are enabled
+    // Individual bindings control their own enabled state via binding.enabled
+    bool has_enabled_bindings = false;
+    for (const auto& binding : fx.bindings) {
+      if (binding.enabled && binding.ddp && !binding.device_id.empty()) {
+        has_enabled_bindings = true;
+        break;
+      }
+    }
     
-    // If effects were just stopped, disable DDP mode for all active devices
-    if (was_running && !is_running) {
+    // Track which devices have active DDP mode for cleanup when all bindings are disabled
+    static bool had_enabled_bindings = false;
+    
+    // If all bindings were just disabled, disable DDP mode for all active devices
+    if (had_enabled_bindings && !has_enabled_bindings) {
       std::lock_guard<std::mutex> lock(mutex_);
       if (!active_ddp_devices_.empty()) {
-        ESP_LOGI(TAG, "Effects stopped - disabling DDP mode for %zu WLED devices", active_ddp_devices_.size());
+        ESP_LOGI(TAG, "All WLED bindings disabled - disabling DDP mode for %zu WLED devices", active_ddp_devices_.size());
         for (const auto& ip : active_ddp_devices_) {
           disable_wled_ddp_mode(ip);
         }
         active_ddp_devices_.clear();
       }
     }
-    was_running = is_running;
+    had_enabled_bindings = has_enabled_bindings;
     
-    if (!is_running) {
-      vTaskDelay(delay);
-      continue;
-    }
+    // Continue even if no enabled bindings - we may have local/virtual segments to render
+    // But skip WLED rendering if no enabled bindings
     
     // Render effects for WLED devices (via DDP)
     // This is the central controller: generates effects (WLED or LEDFx, audio-reactive if enabled) and sends to WLED devices
@@ -1339,8 +1391,8 @@ void WledEffectsRuntime::task_loop() {
         ESP_LOGI(TAG, "No WLED devices configured (%zu bindings)", fx.bindings.size());
       }
     } else if (frame_idx % 300 == 0) {  // Log every 5 seconds
-      ESP_LOGI(TAG, "WLED render loop: %zu bindings, %zu devices, is_running=%d", 
-               fx.bindings.size(), devices_snapshot.size(), is_running ? 1 : 0);
+      ESP_LOGI(TAG, "WLED render loop: %zu bindings, %zu devices, has_enabled_bindings=%d", 
+               fx.bindings.size(), devices_snapshot.size(), has_enabled_bindings ? 1 : 0);
     }
     for (const auto& binding : fx.bindings) {
       // Resolve device first to get IP (needed for cleanup even if disabled)
@@ -1349,6 +1401,17 @@ void WledEffectsRuntime::task_loop() {
       bool device_resolved = false;
       if (!binding.device_id.empty()) {
         device_resolved = resolve_device(binding.device_id, devices_snapshot, status, dev, ip);
+      } else {
+        if (frame_idx % 300 == 0) {
+          ESP_LOGW(TAG, "Binding has empty device_id");
+        }
+      }
+      
+      // Debug logging for DDP sending issues
+      if (frame_idx % 300 == 0) {
+        ESP_LOGI(TAG, "Binding check: device_id=%s, enabled=%d, ddp=%d, resolved=%d, ip=%s, effect=%s",
+                 binding.device_id.c_str(), binding.enabled ? 1 : 0, binding.ddp ? 1 : 0,
+                 device_resolved ? 1 : 0, ip.c_str(), binding.effect.effect.c_str());
       }
       
       // If device is disabled or DDP is disabled, immediately disable DDP mode and remove from active list
@@ -1367,7 +1430,9 @@ void WledEffectsRuntime::task_loop() {
             if (cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0) {
               port = cfg_ref_->mqtt.ddp_port;
             }
-            const uint32_t channel = static_cast<uint32_t>(binding.segment_index == 0 ? 1 : binding.segment_index);
+            // WLED DDP channel mapping: segment_index 0 = channel 1, segment_index 1 = channel 2, etc.
+  // Channel must be 1-based (WLED requirement)
+  const uint32_t channel = static_cast<uint32_t>(binding.segment_index + 1);
             
             // Send black frame immediately (don't cache, don't wait)
             ddp_send_complete_frame(ip, port, black_frame, channel, seq_++);
@@ -1414,10 +1479,14 @@ void WledEffectsRuntime::task_loop() {
                  binding.effect.effect.c_str(), binding.device_id.c_str(), ip.c_str(), 
                  cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : 4048,
                  binding.enabled ? 1 : 0, binding.ddp ? 1 : 0);
-      } else if (!ok && frame_idx % 60 == 0) {  // Log failure every 60 frames (~1 second at 60fps)
-        ESP_LOGW(TAG, "Failed to render/send effect '%s' to device %s (%s:%u)", 
-                 binding.effect.effect.c_str(), binding.device_id.c_str(), ip.c_str(), 
-                 cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : 4048);
+      } else if (!ok) {
+        // Log failure more frequently for debugging
+        if (frame_idx % 60 == 0) {  // Every 1 second at 60fps
+          ESP_LOGW(TAG, "Failed to render/send effect '%s' to device %s (%s:%u, enabled=%d, ddp=%d, active=%d)", 
+                   binding.effect.effect.c_str(), binding.device_id.c_str(), ip.c_str(), 
+                   cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : 4048,
+                   binding.enabled ? 1 : 0, binding.ddp ? 1 : 0, dev.active ? 1 : 0);
+        }
       }
     }
     

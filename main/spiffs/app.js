@@ -566,8 +566,8 @@ function renderLang() {
   updateControlButtons();
   const refreshBtn = qs("btnRefresh");
   if (refreshBtn) {
-    refreshBtn.setAttribute("title", t("btn_refresh"));
-    refreshBtn.setAttribute("aria-label", t("btn_refresh"));
+    refreshBtn.setAttribute("title", t("btn_refresh") + " / " + t("btn_reboot") + " (long press)");
+    refreshBtn.setAttribute("aria-label", t("btn_refresh") + " / " + t("btn_reboot") + " (long press)");
   }
 }
 
@@ -2146,112 +2146,120 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
     <div class="device-meta-grid">
       <div class="device-meta"><strong>${t("colSegName") || "Name"}</strong><span>${name}</span></div>
       <div class="device-meta"><strong>${t("colSegLeds") || "LEDs"}</strong><span>${segment?.led_count ?? "-"}</span></div>
-      <div class="device-meta"><strong>${t("colFxEngine") || "Engine"}</strong><span>${assignment.engine || "wled"}</span></div>
+      <div class="device-meta"><strong>${t("fx_engine_label") || "Effect Engine"}</strong><span>${assignment.engine || "wled"}</span></div>
     </div>
     <details class="fx-section-category" open>
       <summary class="fx-section-header">${t("fx_basic_title") || "Basic Settings"}</summary>
       <div class="form-grid" style="margin-top: 1rem;">
-        <label>${t("colFxEngine") || "Engine"}
+        <label>${t("fx_engine_label") || "Effect Engine"}
           <select id="devFxEngine">
-            <option value="wled" ${assignment.engine === "wled" ? "selected" : ""}>WLED</option>
-            <option value="ledfx" ${assignment.engine === "ledfx" ? "selected" : ""}>LEDFx</option>
+            <option value="wled" ${assignment.engine === "wled" ? "selected" : ""}>WLED (time-based, no audio)</option>
+            <option value="ledfx" ${assignment.engine === "ledfx" ? "selected" : ""}>LEDFx (audio-reactive)</option>
           </select>
+          <small class="muted">${t("fx_engine_desc") || "WLED = time-based animations, LEDFx = audio-reactive effects"}</small>
         </label>
-        <label style="grid-column: span 2;">${t("fx_effect_picker") || "Effect"}
+        <label style="grid-column: span 2;">${t("fx_effect_label") || "Effect Name"}
           <select id="devFxEffect">
             <option value="">Loading...</option>
           </select>
           <small class="muted" id="fxEffectDescription" style="display: block; margin-top: 0.25rem;"></small>
         </label>
-        <label>${t("colFxPreset") || "Preset"}
+        <label>${t("fx_preset_label") || "Preset Name (Optional)"}
           <input id="devFxPreset" value="${assignment.preset || ''}" placeholder="Optional preset name">
+          <small class="muted">${t("fx_preset_desc") || "Optional name to save/load this effect configuration"}</small>
         </label>
       </div>
     </details>
     <details class="fx-section-category" open>
       <summary class="fx-section-header">${t("fx_colors_title") || "Colors & Appearance"}</summary>
       <div class="form-grid" style="margin-top: 1rem;">
-        <label>${t("fx_color1") || "Primary Color"}
+        <label>${t("fx_color1_label") || "Primary Color (Main)"}
           <div>
             <input type="color" id="devFxColor1" value="${assignment.color1 || '#ffffff'}">
             <input type="text" id="devFxColor1Text" value="${assignment.color1 || '#ffffff'}" placeholder="#ffffff">
           </div>
+          <small class="muted">${t("fx_color1_desc") || "Main color used by the effect"}</small>
         </label>
-        <label>${t("fx_color2") || "Secondary Color"}
+        <label>${t("fx_color2_label") || "Secondary Color (Accent)"}
           <div>
             <input type="color" id="devFxColor2" value="${assignment.color2 || '#ff6600'}">
             <input type="text" id="devFxColor2Text" value="${assignment.color2 || '#ff6600'}" placeholder="#ff6600">
           </div>
+          <small class="muted">${t("fx_color2_desc") || "Secondary/accent color for effects that use multiple colors"}</small>
         </label>
-        <label>${t("fx_color3") || "Tertiary Color"}
+        <label>${t("fx_color3_label") || "Tertiary Color (Third)"}
           <div>
             <input type="color" id="devFxColor3" value="${assignment.color3 || '#0033ff'}">
             <input type="text" id="devFxColor3Text" value="${assignment.color3 || '#0033ff'}" placeholder="#0033ff">
           </div>
+          <small class="muted">${t("fx_color3_desc") || "Third color for effects that use three colors"}</small>
         </label>
-        <label>${t("lblFxPalette") || "Palette"}
+        <label>${t("fx_palette_label") || "Color Palette (Predefined)"}
           <select id="devFxPalette">
-            <option value="" ${!assignment.palette ? "selected" : ""}>None (use colors)</option>
-            <option value="sunset" ${assignment.palette === "sunset" ? "selected" : ""}>Sunset</option>
-            <option value="fire" ${assignment.palette === "fire" ? "selected" : ""}>Fire</option>
-            <option value="icy" ${assignment.palette === "icy" ? "selected" : ""}>Icy</option>
-            <option value="forest" ${assignment.palette === "forest" ? "selected" : ""}>Forest</option>
-            <option value="ocean" ${assignment.palette === "ocean" ? "selected" : ""}>Ocean</option>
-            <option value="aqua" ${assignment.palette === "aqua" ? "selected" : ""}>Aqua</option>
-            <option value="party" ${assignment.palette === "party" ? "selected" : ""}>Party</option>
+            <option value="" ${!assignment.palette ? "selected" : ""}>None (use individual colors above)</option>
+            <option value="sunset" ${assignment.palette === "sunset" ? "selected" : ""}>Sunset (warm orange-red)</option>
+            <option value="fire" ${assignment.palette === "fire" ? "selected" : ""}>Fire (red-orange-yellow)</option>
+            <option value="icy" ${assignment.palette === "icy" ? "selected" : ""}>Icy (blue-cyan-white)</option>
+            <option value="forest" ${assignment.palette === "forest" ? "selected" : ""}>Forest (green-brown)</option>
+            <option value="ocean" ${assignment.palette === "ocean" ? "selected" : ""}>Ocean (blue-cyan)</option>
+            <option value="aqua" ${assignment.palette === "aqua" ? "selected" : ""}>Aqua (turquoise-blue)</option>
+            <option value="party" ${assignment.palette === "party" ? "selected" : ""}>Party (multicolor rainbow)</option>
           </select>
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_palette_desc") || "Predefined color palette. Overrides individual colors if set"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_palette_desc") || "Predefined color palette that overrides individual colors if selected"}</small>
         </label>
-        <label style="grid-column: span 2;">${t("lblFxGradient") || "Gradient"}
+        <label style="grid-column: span 2;">${t("fx_gradient_label") || "Custom Color Gradient"}
           <div style="display: flex; gap: 0.5rem; align-items: center;">
             <input id="devFxGradient" value="${assignment.gradient || ''}" placeholder="#000-#fff-#0ff" style="flex: 1;">
-            <button type="button" class="ghost small" id="btnGradientHelper" title="Gradient helper">?</button>
+            <button type="button" class="ghost small" id="btnGradientHelper" title="${t("fx_gradient_helper") || "Gradient helper"}">?</button>
           </div>
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gradient_desc") || "Custom gradient: #color1-#color2-#color3 (separate with comma, dash, semicolon, or space)"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gradient_desc") || "Custom gradient: #color1-#color2-#color3 (separate colors with dash, comma, semicolon, or space)"}</small>
         </label>
       </div>
     </details>
     <details class="fx-section-category" open>
       <summary class="fx-section-header">${t("fx_animation_title") || "Animation & Movement"}</summary>
       <div class="form-grid" style="margin-top: 1rem;">
-        <label>${t("fx_brightness_override") || "Brightness"}
+        <label>${t("fx_brightness_label") || "Effect Brightness"}
           <div class="slider-shell">
             <input type="range" min="0" max="255" id="devFxBrightness" value="${assignment.brightness ?? 255}">
             <span class="slider-value" id="devFxBrightnessValue">${assignment.brightness ?? 255}</span>
           </div>
+          <small class="muted">${t("fx_brightness_desc") || "Overall brightness of the effect (0-255, 255 = maximum)"}</small>
         </label>
-        <label>${t("colFxIntensity") || "Intensity"}
+        <label>${t("fx_intensity_label") || "Effect Intensity / Strength"}
           <div class="slider-shell">
             <input type="range" min="0" max="255" id="devFxIntensity" value="${assignment.intensity ?? 128}">
             <span class="slider-value" id="devFxIntensityValue">${assignment.intensity ?? 128}</span>
           </div>
+          <small class="muted">${t("fx_intensity_desc") || "How strong/prominent the effect is (0-255, higher = more visible)"}</small>
         </label>
-        <label>${t("colFxSpeed") || "Speed"}
+        <label>${t("fx_speed_label") || "Animation Speed"}
           <div class="slider-shell">
             <input type="range" min="0" max="255" id="devFxSpeed" value="${assignment.speed ?? 128}">
             <span class="slider-value" id="devFxSpeedValue">${assignment.speed ?? 128}</span>
           </div>
+          <small class="muted">${t("fx_speed_desc") || "How fast the effect animates (0-255, higher = faster movement)"}</small>
         </label>
-        <label>${t("lblFxDirection") || "Direction"}
+        <label>${t("fx_direction_label") || "Animation Direction"}
           <select id="devFxDirection">
-            <option value="forward" ${assignment.direction === "forward" ? "selected" : ""}>Forward</option>
-            <option value="reverse" ${assignment.direction === "reverse" || assignment.direction === "backward" ? "selected" : ""}>Reverse</option>
-            <option value="center_out" ${assignment.direction === "center_out" ? "selected" : ""}>Center out</option>
-            <option value="edges_in" ${assignment.direction === "edges_in" ? "selected" : ""}>Edges in</option>
+            <option value="forward" ${assignment.direction === "forward" ? "selected" : ""}>Forward (Start → End)</option>
+            <option value="reverse" ${assignment.direction === "reverse" || assignment.direction === "backward" ? "selected" : ""}>Reverse (End → Start)</option>
+            <option value="center_out" ${assignment.direction === "center_out" ? "selected" : ""}>Center Out (Middle → Edges)</option>
+            <option value="edges_in" ${assignment.direction === "edges_in" ? "selected" : ""}>Edges In (Edges → Middle)</option>
           </select>
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_direction_desc") || "Direction of effect movement along the LED strip"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_direction_desc") || "Which direction the effect moves along the LED strip"}</small>
         </label>
-        <label>${t("lblFxScatter") || "Scatter"}
+        <label>${t("fx_scatter_label") || "Randomness / Particle Spread"}
           <input type="number" id="devFxScatter" min="0" max="100" step="1" value="${assignment.scatter ?? 0}">
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_scatter_desc") || "Randomness/spread of effect particles (0-100)"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_scatter_desc") || "How random/spread out the effect particles are (0-100, 0 = uniform, 100 = very random)"}</small>
         </label>
-        <label>${t("lblFxFadeIn") || "Fade-in (ms)"}
+        <label>${t("fx_fadein_label") || "Fade-in Time (when starting)"}
           <input type="number" id="devFxFadeIn" min="0" max="5000" value="${assignment.fade_in ?? 0}">
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_fadein_desc") || "Time in milliseconds for effect to fade in when starting"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_fadein_desc") || "Time in milliseconds for effect to gradually appear when starting (0 = instant)"}</small>
         </label>
-        <label>${t("lblFxFadeOut") || "Fade-out (ms)"}
+        <label>${t("fx_fadeout_label") || "Fade-out Time (when stopping)"}
           <input type="number" id="devFxFadeOut" min="0" max="5000" value="${assignment.fade_out ?? 0}">
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_fadeout_desc") || "Time in milliseconds for effect to fade out when stopping"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_fadeout_desc") || "Time in milliseconds for effect to gradually disappear when stopping (0 = instant)"}</small>
         </label>
       </div>
     </details>
@@ -2260,23 +2268,23 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
       <div class="form-grid" style="margin-top: 1rem;">
         <label class="switch">
           <input type="checkbox" id="devFxAudioLink" ${assignment.audio_link ? "checked" : ""} ${assignment.engine === "wled" ? "disabled" : ""}>
-          <span></span> ${t("colFxAudioLink") || "Enable audio reactivity"}
-          ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only available for LEDFx effects</small>` : ""}
+          <span></span> ${t("fx_audio_link_label") || "Enable Audio Reactivity"}
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${assignment.engine === "wled" ? (t("fx_audio_only_ledfx") || "Only available for LEDFx effects") : (t("fx_audio_link_desc") || "Make the effect respond to music/audio input")}</small>
         </label>
         ${assignment.audio_link && assignment.engine !== "wled" ? `
-        <label>${t("colFxAudioProfile") || "Audio profile"}
+        <label>${t("fx_audio_profile_label") || "Audio Response Profile"}
           <select id="devFxAudioProfile" ${assignment.engine === "wled" ? "disabled" : ""}>
             ${renderAudioProfileOptions(assignment.audio_profile || "default")}
           </select>
-          ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : ""}
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${assignment.engine === "wled" ? (t("fx_audio_only_ledfx") || "Only for LEDFx effects") : (t("fx_audio_profile_desc") || "Predefined audio processing profile (default, energy, tempo, etc.)")}</small>
         </label>
-        <label>${t("colFxAudioMode") || "Audio mode"}
+        <label>${t("fx_audio_mode_label") || "Audio Analysis Mode"}
           <select id="devFxAudioMode" ${assignment.engine === "wled" ? "disabled" : ""}>
             ${renderAudioModeOptions(assignment.audio_mode || "spectrum")}
           </select>
-          ${assignment.engine === "wled" ? `<small class="muted" style="display: block; margin-top: 0.25rem;">Only for LEDFx effects</small>` : ""}
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${assignment.engine === "wled" ? (t("fx_audio_only_ledfx") || "Only for LEDFx effects") : (t("fx_audio_mode_desc") || "How audio is analyzed: Spectrum (frequency bands), Energy (overall level), Beat (rhythm detection)")}</small>
         </label>
-        <label style="grid-column: 1 / -1;">${t("fx_audio_bands") || "Frequency bands"}
+        <label style="grid-column: 1 / -1;">${t("fx_audio_bands_label") || "Frequency Bands / Audio Metrics"}
           <div id="devFxBandsContainer" style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem;">
             ${(() => {
               const bands = assignment.selected_bands || [];
@@ -2340,91 +2348,91 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
         <details class="fx-subsection" open>
           <summary class="fx-subsection-header">${t("fx_audio_sensitivity_title") || "Audio Sensitivity"}</summary>
           <div class="form-grid" style="margin-top: 0.75rem;">
-            <label>${t("lblFxSensBass") || "Bass gain"}
+            <label>${t("fx_sens_bass_label") || "Bass Frequency Sensitivity"}
               <input type="number" id="devFxSensBass" step="0.05" min="0" max="5" value="${assignment.band_gain_low ?? 1}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_sens_bass_desc") || "Audio sensitivity multiplier for bass frequencies (0-5, 1.0 = normal)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_sens_bass_desc") || "How much the effect responds to bass frequencies (low sounds). 1.0 = normal, >1 = more sensitive, <1 = less sensitive"}</small>
             </label>
-            <label>${t("lblFxSensMids") || "Mids gain"}
+            <label>${t("fx_sens_mids_label") || "Mid Frequency Sensitivity"}
               <input type="number" id="devFxSensMids" step="0.05" min="0" max="5" value="${assignment.band_gain_mid ?? 1}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_sens_mids_desc") || "Audio sensitivity multiplier for mid frequencies (0-5, 1.0 = normal)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_sens_mids_desc") || "How much the effect responds to mid frequencies (vocals, instruments). 1.0 = normal, >1 = more sensitive, <1 = less sensitive"}</small>
             </label>
-            <label>${t("lblFxSensTreble") || "Treble gain"}
+            <label>${t("fx_sens_treble_label") || "Treble Frequency Sensitivity"}
               <input type="number" id="devFxSensTreble" step="0.05" min="0" max="5" value="${assignment.band_gain_high ?? 1}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_sens_treble_desc") || "Audio sensitivity multiplier for treble frequencies (0-5, 1.0 = normal)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_sens_treble_desc") || "How much the effect responds to treble frequencies (high sounds, cymbals). 1.0 = normal, >1 = more sensitive, <1 = less sensitive"}</small>
             </label>
-            <label>${t("lblFxAmplitude") || "Amplitude scale"}
+            <label>${t("fx_amplitude_label") || "Overall Audio Volume Scaling"}
               <input type="number" id="devFxAmplitude" step="0.05" min="0" max="5" value="${assignment.amplitude_scale ?? 1}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_amplitude_desc") || "Overall audio amplitude scaling factor (0-5, 1.0 = normal)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_amplitude_desc") || "Scale all audio input levels (0-5, 1.0 = normal, >1 = louder response, <1 = quieter response)"}</small>
             </label>
-            <label>${t("lblFxBrightnessCompress") || "Brightness compress"}
+            <label>${t("fx_brightness_compress_label") || "Brightness Dynamic Range Compression"}
               <input type="number" id="devFxBrightnessCompress" step="0.05" min="0" max="5" value="${assignment.brightness_compress ?? 0}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_brightness_compress_desc") || "Compress dynamic range of brightness (0-5, 0 = no compression)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_brightness_compress_desc") || "Reduce brightness variation (0 = full range, higher = less variation, smoother)"}</small>
             </label>
             <label class="switch">
               <input type="checkbox" id="devFxBeatResponse" ${assignment.beat_response ? "checked" : ""}>
-              <span></span> ${t("lblFxBeatResponse") || "Beat response"}
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_beat_response_desc") || "Enable enhanced response to beat detection"}</small>
+              <span></span> ${t("fx_beat_response_label") || "Enhanced Beat Detection"}
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_beat_response_desc") || "Make the effect react more strongly to detected beats in the music"}</small>
             </label>
-            <label>${t("lblFxAttack") || "Attack (ms)"}
+            <label>${t("fx_attack_label") || "Response Speed (Attack Time)"}
               <input type="number" id="devFxAttack" min="0" max="2000" value="${assignment.attack_ms ?? 25}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_attack_desc") || "Audio attack time - how fast effect responds to audio increase (0-2000ms)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_attack_desc") || "How quickly the effect responds when audio increases (0-2000ms, lower = faster response, higher = slower/smoother)"}</small>
             </label>
-            <label>${t("lblFxRelease") || "Release (ms)"}
+            <label>${t("fx_release_label") || "Fade Speed (Release Time)"}
               <input type="number" id="devFxRelease" min="0" max="3000" value="${assignment.release_ms ?? 120}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_release_desc") || "Audio release time - how fast effect fades when audio decreases (0-3000ms)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_release_desc") || "How quickly the effect fades when audio decreases (0-3000ms, lower = faster fade, higher = slower/smoother fade)"}</small>
             </label>
             <label class="switch">
               <input type="checkbox" id="devFxBeatShuffle" ${assignment.beat_shuffle ? "checked" : ""}>
-              <span></span> ${t("lblFxBeatShuffle") || "Beat shuffle"}
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_beat_shuffle_desc") || "Randomize beat timing for more variation"}</small>
+              <span></span> ${t("fx_beat_shuffle_label") || "Randomize Beat Timing"}
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_beat_shuffle_desc") || "Add randomness to beat timing for more natural variation"}</small>
             </label>
           </div>
         </details>
         <details class="fx-subsection">
           <summary class="fx-subsection-header">${t("fx_rendering_title") || "Rendering"}</summary>
           <div class="form-grid" style="margin-top: 0.75rem;">
-            <label>${t("lblFxBlendMode") || "Blend"}
+            <label>${t("fx_blend_mode_label") || "Effect Blending Mode"}
               <select id="devFxBlendMode">
-                <option value="normal" ${assignment.blend_mode === "normal" ? "selected" : ""}>Normal</option>
-                <option value="add" ${assignment.blend_mode === "add" ? "selected" : ""}>Add</option>
-                <option value="screen" ${assignment.blend_mode === "screen" ? "selected" : ""}>Screen</option>
-                <option value="multiply" ${assignment.blend_mode === "multiply" ? "selected" : ""}>Multiply</option>
+                <option value="normal" ${assignment.blend_mode === "normal" ? "selected" : ""}>Normal (Replace)</option>
+                <option value="add" ${assignment.blend_mode === "add" ? "selected" : ""}>Add (Brighten)</option>
+                <option value="screen" ${assignment.blend_mode === "screen" ? "selected" : ""}>Screen (Lighten)</option>
+                <option value="multiply" ${assignment.blend_mode === "multiply" ? "selected" : ""}>Multiply (Darken)</option>
               </select>
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_blend_mode_desc") || "How this effect blends with others: Normal (replace), Add (brighten), Screen (lighten), Multiply (darken)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_blend_mode_desc") || "How this effect combines with other effects: Normal = replace, Add = make brighter, Screen = make lighter, Multiply = make darker"}</small>
             </label>
-            <label>${t("lblFxLayers") || "Layers"}
+            <label>${t("fx_layers_label") || "Effect Layers (Multiplicity)"}
               <input type="number" id="devFxLayers" min="1" max="8" value="${assignment.layers ?? 1}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_layers_desc") || "Number of effect layers to render simultaneously (1-8)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_layers_desc") || "Render multiple copies of the effect simultaneously for richer visuals (1-8 layers)"}</small>
             </label>
-            <label>${t("lblFxGammaColor") || "Gamma color"}
+            <label>${t("fx_gamma_color_label") || "Color Gamma Correction"}
               <input type="number" id="devFxGammaColor" step="0.1" min="0.5" max="4" value="${assignment.gamma_color ?? 2.2}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gamma_color_desc") || "Gamma correction for color accuracy (0.5-4.0, default 2.2)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gamma_color_desc") || "Adjust color accuracy for LED strips (0.5-4.0, 2.2 = standard, lower = more saturated, higher = less saturated)"}</small>
             </label>
-            <label>${t("lblFxGammaBrightness") || "Gamma brightness"}
+            <label>${t("fx_gamma_brightness_label") || "Brightness Gamma Correction"}
               <input type="number" id="devFxGammaBrightness" step="0.1" min="0.5" max="4" value="${assignment.gamma_brightness ?? 2.2}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gamma_brightness_desc") || "Gamma correction for brightness perception (0.5-4.0, default 2.2)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gamma_brightness_desc") || "Adjust brightness perception for human eye (0.5-4.0, 2.2 = standard, lower = brighter appearance, higher = darker appearance)"}</small>
             </label>
           </div>
         </details>
         <details class="fx-subsection">
           <summary class="fx-subsection-header">${t("fx_brightness_title") || "Brightness & Overrides"}</summary>
           <div class="form-grid" style="margin-top: 0.75rem;">
-            <label>${t("lblFxBrightnessOverride") || "Brightness override"}
+            <label>${t("fx_brightness_override_label") || "Per-Effect Brightness Override"}
               <input type="number" id="devFxBrightnessOverride" min="0" max="255" value="${assignment.brightness_override ?? 0}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_brightness_override_desc") || "Override global brightness for this effect (0-255, 0 = use global)"}</small>
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_brightness_override_desc") || "Override the global brightness setting for this specific effect (0-255, 0 = use global brightness, 1-255 = custom brightness)"}</small>
             </label>
           </div>
         </details>
         <details class="fx-subsection">
           <summary class="fx-subsection-header">${t("fx_scene_title") || "Scene & Scheduling"}</summary>
           <div class="form-grid" style="margin-top: 0.75rem;">
-            <label>${t("lblFxScenePreset") || "Scene preset"}
-              <input id="devFxScenePreset" value="${assignment.scene_preset || ''}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_scene_preset_desc") || "Name of scene preset to activate with this effect"}</small>
+            <label>${t("fx_scene_preset_label") || "Scene Preset Name"}
+              <input id="devFxScenePreset" value="${assignment.scene_preset || ''}" placeholder="scene-name">
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_scene_preset_desc") || "Name of scene preset to activate when this effect is selected"}</small>
             </label>
-            <label>${t("lblFxSceneSchedule") || "Scene schedule"}
-              <input id="devFxSceneSchedule" value="${assignment.scene_schedule || ''}">
-              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_scene_schedule_desc") || "Schedule pattern for scene activation (time-based)"}</small>
+            <label>${t("fx_scene_schedule_label") || "Scene Schedule Pattern"}
+              <input id="devFxSceneSchedule" value="${assignment.scene_schedule || ''}" placeholder="e.g. 09:00-17:00">
+              <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_scene_schedule_desc") || "Time-based schedule pattern for automatic scene activation (e.g. '09:00-17:00' for 9am-5pm)"}</small>
             </label>
           </div>
         </details>
@@ -2435,28 +2443,28 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
       <div class="form-grid" style="margin-top: 1rem;">
         <label class="switch">
           <input type="checkbox" id="devAudioStereoSplit" ${audio.stereo_split ? "checked" : ""}>
-          <span></span> ${t("colFxStereo") || "Stereo split"}
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_stereo_split_desc") || "Split audio input: left channel controls first half of LEDs, right channel controls second half"}</small>
+          <span></span> ${t("fx_stereo_split_label") || "Stereo Split (Left/Right Separation)"}
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_stereo_split_desc") || "Split audio: left channel controls first half of LEDs, right channel controls second half"}</small>
         </label>
-        <label>${t("colFxGainL") || "Gain L"}
+        <label>${t("fx_gain_left_label") || "Left Channel Audio Gain"}
           <input type="number" step="0.05" id="devAudioGainL" value="${audio.gain_left ?? 1}">
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gain_l_desc") || "Left channel audio gain multiplier (0-5, 1.0 = normal)"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gain_l_desc") || "Volume multiplier for left audio channel (0-5, 1.0 = normal, >1 = louder, <1 = quieter)"}</small>
         </label>
-        <label>${t("colFxGainR") || "Gain R"}
+        <label>${t("fx_gain_right_label") || "Right Channel Audio Gain"}
           <input type="number" step="0.05" id="devAudioGainR" value="${audio.gain_right ?? 1}">
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gain_r_desc") || "Right channel audio gain multiplier (0-5, 1.0 = normal)"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_gain_r_desc") || "Volume multiplier for right audio channel (0-5, 1.0 = normal, >1 = louder, <1 = quieter)"}</small>
         </label>
-        <label>${t("colFxSensitivity") || "Sensitivity"}
+        <label>${t("fx_sensitivity_label") || "Overall Audio Sensitivity"}
           <input type="number" min="0" max="2" step="0.01" id="devAudioSensitivity" value="${audio.sensitivity ?? 0.85}">
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_sensitivity_desc") || "Overall audio sensitivity (0-2, higher = more reactive)"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_sensitivity_desc") || "How sensitive the effect is to audio changes (0-2, 0.85 = default, higher = more reactive, lower = less reactive)"}</small>
         </label>
-        <label>${t("colFxThreshold") || "Threshold"}
+        <label>${t("fx_threshold_label") || "Audio Activation Threshold"}
           <input type="number" min="0" max="1" step="0.01" id="devAudioThreshold" value="${audio.threshold ?? 0.05}">
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_threshold_desc") || "Minimum audio level to trigger effect (0-1, higher = less sensitive)"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_threshold_desc") || "Minimum audio level needed to activate the effect (0-1, 0.05 = default, higher = needs louder audio, lower = reacts to quieter sounds)"}</small>
         </label>
-        <label>${t("colFxSmoothing") || "Smoothing"}
+        <label>${t("fx_smoothing_label") || "Audio Smoothing / Anti-Jitter"}
           <input type="number" min="0" max="1" step="0.01" id="devAudioSmoothing" value="${audio.smoothing ?? 0.65}">
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_smoothing_desc") || "Audio smoothing factor (0-1, higher = smoother, less jittery)"}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_smoothing_desc") || "Smooth out rapid audio changes to reduce flickering (0-1, 0.65 = default, higher = smoother but slower response, lower = faster but more jittery)"}</small>
         </label>
       </div>
     </details>
@@ -3141,9 +3149,12 @@ function updateOverview() {
 
   // Update diagnostic bar: network status
   updateNetworkStatus(info);
-  
+
   // Update diagnostic bar: CPU temperature
   updateTemperatureIndicator(info);
+
+  // Update diagnostic bar: CPU usage
+  updateCpuUsageIndicator(info);
   
   const ledEnabled = info?.led_engine?.enabled ?? !!state.ledState.enabled;
   setBadge("badgeStatus", ledEnabled ? t("badge_running") : t("badge_stopped"), ledEnabled ? "ok" : "warn");
@@ -3215,15 +3226,59 @@ function formatTrafficRate(bytesPerSecond) {
   return `${(bytesPerSecond / (1024 * 1024)).toFixed(2)} MB/s`;
 }
 
+function updateCpuUsageIndicator(info) {
+  const cpuIndicator = qs("cpuUsageIndicator");
+  const core0Value = qs("cpuCore0Value");
+  const core1Value = qs("cpuCore1Value");
+
+  if (!cpuIndicator || !core0Value || !core1Value) {
+    // Elements not found - might be called before DOM is ready
+    return;
+  }
+
+  const cpuUsage = info?.cpu_usage;
+  if (!cpuUsage || cpuUsage.core0 === undefined || cpuUsage.core1 === undefined) {
+    core0Value.textContent = "--%";
+    core1Value.textContent = "--%";
+    cpuIndicator.removeAttribute("data-usage-level");
+    return;
+  }
+
+  const core0 = cpuUsage.core0;
+  const core1 = cpuUsage.core1;
+
+  // Check if values are valid (not undefined, not null, >= 0)
+  const core0Valid = core0 !== undefined && core0 !== null && core0 >= 0 && Number.isFinite(core0);
+  const core1Valid = core1 !== undefined && core1 !== null && core1 >= 0 && Number.isFinite(core1);
+  
+  if (core0Valid && core1Valid) {
+    core0Value.textContent = `${Math.round(core0)}%`;
+    core1Value.textContent = `${Math.round(core1)}%`;
+    
+    // Update color based on usage level
+    cpuIndicator.setAttribute("data-usage-level", 
+      core0 > 80 || core1 > 80 ? "high" : 
+      core0 > 50 || core1 > 50 ? "medium" : "low");
+  } else {
+    core0Value.textContent = "--%";
+    core1Value.textContent = "--%";
+    cpuIndicator.removeAttribute("data-usage-level");
+  }
+}
+
 function updateTemperatureIndicator(info) {
   const tempIndicator = qs("temperatureIndicator");
   const tempValue = qs("temperatureValue");
-  if (!tempIndicator || !tempValue) return;
-  
-  const cpuTemp = info.cpu_temp_celsius;
+
+  if (!tempIndicator || !tempValue) {
+    // Elements not found - might be called before DOM is ready
+    return;
+  }
+
+  const cpuTemp = info?.cpu_temp_celsius;
   
   // Check if temperature is unavailable (undefined, null, or -1)
-  if (cpuTemp === undefined || cpuTemp === null || cpuTemp < 0) {
+  if (cpuTemp === undefined || cpuTemp === null || cpuTemp < 0 || !Number.isFinite(cpuTemp)) {
     tempValue.textContent = "--°C";
     tempIndicator.setAttribute("data-temp", "0");
     tempIndicator.removeAttribute("data-temp-level");
@@ -4215,42 +4270,130 @@ function renderVirtualSegments() {
   }
   const physical = (state.config?.led_engine?.segments || []).map((s) => ({ id: s.id, name: s.name || s.id }));
   const wled = (state.config?.wled_devices || []).map((d) => ({ id: d.id || d.address, name: d.name || d.id || d.address }));
+  // Helper: Get LED count for physical segment
+  const getPhysicalLedCount = (segId) => {
+    const seg = (state.config?.led_engine?.segments || []).find(s => s.id === segId);
+    return seg ? (seg.led_count || 0) : 0;
+  };
+  
+  // Helper: Get LED count for WLED device
+  const getWledLedCount = (devId) => {
+    const dev = (state.config?.wled_devices || []).find(d => (d.id || d.address) === devId);
+    return dev ? (dev.leds || 0) : 0;
+  };
+  
   const renderMember = (m, segIdx, memberIdx) => {
+    const isPhysical = m.type === "physical";
+    const isWled = m.type === "wled";
+    const targetId = m.id || "";
+    const ledCount = isPhysical ? getPhysicalLedCount(targetId) : (isWled ? getWledLedCount(targetId) : 0);
+    const maxStart = Math.max(0, ledCount - 1);
+    const currentStart = m.start || 0;
+    const effectiveLength = (m.length || 0) === 0 && ledCount > 0 ? ledCount - currentStart : (m.length || 0);
+    const maxLength = ledCount > 0 ? ledCount - currentStart : 0;
+    const rangeEnd = currentStart + effectiveLength;
+    const isValid = !targetId || (ledCount > 0 && currentStart < ledCount && rangeEnd <= ledCount && effectiveLength > 0);
+    
     const options =
-      `<option value="">${t("pin_select") || "Select target"}</option>` +
-      physical.map((p) => `<option value="physical:${p.id}" ${m.type === "physical" && m.id === p.id ? "selected" : ""}>${p.name} (physical)</option>`).join("") +
-      wled.map((d) => `<option value="wled:${d.id}" ${m.type === "wled" && m.id === d.id ? "selected" : ""}>${d.name} (WLED)</option>`).join("");
+      `<option value="">${t("virtual_select_target") || "Select device or segment..."}</option>` +
+      (physical.length > 0 ? `<optgroup label="${t("virtual_physical_segments") || "Physical Segments"}">` +
+      physical.map((p) => {
+        const pLedCount = getPhysicalLedCount(p.id);
+        return `<option value="physical:${p.id}" ${m.type === "physical" && m.id === p.id ? "selected" : ""}>${p.name} (${pLedCount} LED${pLedCount !== 1 ? 's' : ''})</option>`;
+      }).join("") + `</optgroup>` : "") +
+      (wled.length > 0 ? `<optgroup label="${t("virtual_wled_devices") || "WLED Devices"}">` +
+      wled.map((d) => {
+        const wLedCount = getWledLedCount(d.id);
+        return `<option value="wled:${d.id}" ${m.type === "wled" && m.id === d.id ? "selected" : ""}>${d.name} (${wLedCount} LED${wLedCount !== 1 ? 's' : ''})</option>`;
+      }).join("") + `</optgroup>` : "");
+    
     return `
-      <div class="virtual-member" data-virtual="${segIdx}" data-member="${memberIdx}">
-        <select class="virtual-member-target">
-          ${options}
-        </select>
-        <label>${t("wled_segment_index") || "Segment"} <input type="number" min="0" class="virtual-member-seg" value="${m.segment_index ?? 0}"></label>
-        <label>Start <input type="number" min="0" class="virtual-member-start" value="${m.start ?? 0}"></label>
-        <label>Length <input type="number" min="0" class="virtual-member-length" value="${m.length ?? 0}"></label>
-        <button type="button" class="ghost small danger" data-action="remove-virtual-member">&times;</button>
+      <div class="virtual-member ${isValid ? '' : 'invalid'}" data-virtual="${segIdx}" data-member="${memberIdx}">
+        <div class="virtual-member-header">
+          <div class="virtual-member-type-badge ${isPhysical ? 'type-physical' : (isWled ? 'type-wled' : 'type-none')}">
+            ${isPhysical ? '🔌' : (isWled ? '📡' : '❓')}
+            <span>${isPhysical ? (t("virtual_type_physical") || "Physical") : (isWled ? (t("virtual_type_wled") || "WLED") : (t("virtual_type_none") || "Not selected"))}</span>
+          </div>
+          <button type="button" class="ghost small danger" data-action="remove-virtual-member" title="${t("virtual_remove_member") || "Remove member"}">&times;</button>
+        </div>
+        <div class="virtual-member-body">
+          <label class="virtual-member-target-label">
+            <span>${t("virtual_target_device") || "Target Device/Segment"}</span>
+            <select class="virtual-member-target">
+              ${options}
+            </select>
+            ${targetId && ledCount > 0 ? `<small class="muted">${ledCount} LED${ledCount !== 1 ? 's' : ''} available</small>` : ''}
+          </label>
+          ${isWled ? `
+          <label class="virtual-member-seg-label">
+            <span>${t("virtual_wled_segment") || "WLED Segment Index"}</span>
+            <input type="number" min="0" class="virtual-member-seg" value="${m.segment_index ?? 0}" placeholder="0">
+            <small class="muted">${t("virtual_wled_segment_hint") || "Segment number on WLED device (0 = first segment)"}</small>
+          </label>
+          ` : ''}
+          <div class="virtual-member-range">
+            <label class="virtual-member-start-label">
+              <span>${t("virtual_start_index") || "Start LED"}</span>
+              <input type="number" min="0" max="${maxStart}" class="virtual-member-start" value="${currentStart}" placeholder="0">
+              <small class="muted">${t("virtual_start_hint") || "First LED index (0-based)"}</small>
+            </label>
+            <label class="virtual-member-length-label">
+              <span>${t("virtual_length") || "LED Count"}</span>
+              <input type="number" min="0" max="${maxLength}" class="virtual-member-length" value="${m.length || 0}" placeholder="${ledCount > 0 ? ledCount : '0'}">
+              <small class="muted">${t("virtual_length_hint") || "Number of LEDs to use (0 = all remaining from start)"}</small>
+            </label>
+          </div>
+          ${ledCount > 0 ? `
+          <div class="virtual-member-preview">
+            <div class="virtual-member-preview-label">${t("virtual_range_preview") || "Range:"}</div>
+            <div class="virtual-member-preview-bar">
+              <div class="virtual-member-preview-used" style="width: ${(rangeEnd / ledCount) * 100}%; left: ${(currentStart / ledCount) * 100}%;"></div>
+              <div class="virtual-member-preview-text">LED ${currentStart} - ${Math.min(rangeEnd - 1, ledCount - 1)} (${effectiveLength} LED${effectiveLength !== 1 ? 's' : ''})</div>
+            </div>
+          </div>
+          ` : ''}
+          ${!isValid && targetId ? `<div class="virtual-member-error">⚠️ ${t("virtual_range_invalid") || "Range exceeds available LEDs"}</div>` : ''}
+        </div>
       </div>
     `;
   };
   container.innerHTML = segments
     .map((seg, idx) => {
       const members = seg.members.map((m, mIdx) => renderMember(m, idx, mIdx)).join("");
+      const totalMembers = seg.members?.length || 0;
+      const enabledMembers = seg.members?.filter(m => m.id && (m.type === "physical" || m.type === "wled")).length || 0;
       return `
         <div class="virtual-card" data-virtual="${idx}">
           <div class="virtual-header">
-            <input class="virtual-name" value="${seg.name || ''}" placeholder="Name">
-            <input class="virtual-id" value="${seg.id || ''}" placeholder="ID">
-            <label class="switch compact">
-              <input type="checkbox" class="virtual-enabled" ${seg.enabled !== false ? "checked" : ""}>
-              <span></span>
-            </label>
-            <button type="button" class="ghost small danger" data-action="remove-virtual">&times;</button>
+            <div class="virtual-header-main">
+              <input class="virtual-name" value="${seg.name || ''}" placeholder="${t("virtual_name_placeholder") || "Virtual Segment Name"}">
+              <div class="virtual-header-meta">
+                <span class="virtual-member-count">${enabledMembers} ${t("virtual_member_count") || "member" + (enabledMembers !== 1 ? 's' : '')}</span>
+                <span class="virtual-id-display">ID: <code>${seg.id || 'auto'}</code></span>
+              </div>
+            </div>
+            <div class="virtual-header-actions">
+              <label class="switch compact" title="${t("virtual_enable_hint") || "Enable/disable this virtual segment"}">
+                <input type="checkbox" class="virtual-enabled" ${seg.enabled !== false ? "checked" : ""}>
+                <span></span>
+                <span class="switch-label">${t("badge_enabled") || "Enabled"}</span>
+              </label>
+              <button type="button" class="ghost small danger" data-action="remove-virtual" title="${t("virtual_remove_segment") || "Remove virtual segment"}">&times;</button>
+            </div>
           </div>
-          <div class="virtual-members">
-            ${members || `<div class="placeholder muted">${t("wled_empty_hint") || "No members"}</div>`}
-          </div>
-          <div class="form-actions start">
-            <button type="button" class="ghost small" data-action="add-virtual-member" data-virtual="${idx}">Add member</button>
+          <div class="virtual-body">
+            <div class="virtual-members-header">
+              <h4>${t("virtual_members_title") || "Members"}</h4>
+              <p class="muted">${t("virtual_members_desc") || "Add devices or segments to combine them into one virtual group"}</p>
+            </div>
+            <div class="virtual-members">
+              ${members || `<div class="placeholder muted">${t("virtual_no_members") || "No members yet. Click 'Add member' to start."}</div>`}
+            </div>
+            <div class="form-actions start">
+              <button type="button" class="ghost small" data-action="add-virtual-member" data-virtual="${idx}">
+                <span>+</span> ${t("virtual_add_member") || "Add member"}
+              </button>
+            </div>
           </div>
         </div>
       `;
@@ -4268,8 +4411,18 @@ function addVirtualMember(segIdx) {
   ensureVirtualSegments();
   const seg = state.config.virtual_segments[segIdx];
   if (!seg) return;
+  if (!seg.members) seg.members = [];
   seg.members.push({ type: "physical", id: "", segment_index: 0, start: 0, length: 0 });
   renderVirtualSegments();
+  // Scroll to the new member
+  setTimeout(() => {
+    const newMember = document.querySelector(`.virtual-member[data-virtual="${segIdx}"][data-member="${seg.members.length - 1}"]`);
+    if (newMember) {
+      newMember.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const select = newMember.querySelector('.virtual-member-target');
+      if (select) select.focus();
+    }
+  }, 100);
 }
 
 function removeVirtualSegment(segIdx) {
@@ -4315,7 +4468,14 @@ function handleVirtualListInput(event) {
     if (mem) {
       mem.type = type || "physical";
       mem.id = ref || "";
+      // Reset start/length when target changes
+      if (!val) {
+        mem.start = 0;
+        mem.length = 0;
+      }
     }
+    // Re-render to update LED count and validation
+    renderVirtualSegments();
     return;
   }
   if (event.target.classList.contains("virtual-member-seg")) {
@@ -4337,6 +4497,8 @@ function handleVirtualListInput(event) {
       if (!Number.isFinite(val) || val < 0) val = 0;
       mem.start = val;
       event.target.value = val;
+      // Re-render to update preview and validation
+      renderVirtualSegments();
     }
     return;
   }
@@ -4348,6 +4510,8 @@ function handleVirtualListInput(event) {
       if (!Number.isFinite(val) || val < 0) val = 0;
       mem.length = val;
       event.target.value = val;
+      // Re-render to update preview and validation
+      renderVirtualSegments();
     }
     return;
   }
@@ -5625,20 +5789,61 @@ function initEvents() {
 
   const btnRefresh = qs("btnRefresh");
   if (btnRefresh) {
+    let longPressTimer = null;
+    let isLongPress = false;
+    
+    // Handle click (refresh)
     btnRefresh.addEventListener("click", debounce(() => {
-      if (!state.refreshingInfo) {
-        refreshInfo(true);
+      if (!isLongPress) {
+        if (!state.refreshingInfo) {
+          refreshInfo(true);
+        }
+        if (!state.loadingWled) {
+          loadWledDevices(true);
+        }
       }
-      if (!state.loadingWled) {
-        loadWledDevices(true);
-      }
+      isLongPress = false;
     }, 500));
-  }
-  const btnReboot = qs("btnReboot");
-  if (btnReboot) {
-    btnReboot.addEventListener("click", () => {
-      notify(t("toast_rebooting"), "warn");
-      fetch("/api/reboot", { method: "POST" });
+    
+    // Handle long press (reboot) - 1 second
+    btnRefresh.addEventListener("mousedown", () => {
+      isLongPress = false;
+      longPressTimer = setTimeout(() => {
+        isLongPress = true;
+        notify(t("toast_rebooting"), "warn");
+        fetch("/api/reboot", { method: "POST" });
+      }, 1000);
+    });
+    
+    btnRefresh.addEventListener("mouseup", () => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    });
+    
+    btnRefresh.addEventListener("mouseleave", () => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    });
+    
+    // Touch events for mobile
+    btnRefresh.addEventListener("touchstart", () => {
+      isLongPress = false;
+      longPressTimer = setTimeout(() => {
+        isLongPress = true;
+        notify(t("toast_rebooting"), "warn");
+        fetch("/api/reboot", { method: "POST" });
+      }, 1000);
+    });
+    
+    btnRefresh.addEventListener("touchend", () => {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
     });
   }
 

@@ -896,6 +896,8 @@ void decode_wled_effects(AppConfig& cfg, cJSON* root) {
       if (cJSON* ena = cJSON_GetObjectItem(entry, "enabled"); cJSON_IsBool(ena)) {
         bind.enabled = cJSON_IsTrue(ena);
       }
+      // DDP is enabled by default (true)
+      bind.ddp = true;  // Default to true
       if (cJSON* ddp = cJSON_GetObjectItem(entry, "ddp"); cJSON_IsBool(ddp)) {
         bind.ddp = cJSON_IsTrue(ddp);
       }
