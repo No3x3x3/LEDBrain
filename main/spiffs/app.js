@@ -3222,7 +3222,8 @@ function updateTemperatureIndicator(info) {
   
   const cpuTemp = info.cpu_temp_celsius;
   
-  if (cpuTemp === undefined || cpuTemp === null) {
+  // Check if temperature is unavailable (undefined, null, or -1)
+  if (cpuTemp === undefined || cpuTemp === null || cpuTemp < 0) {
     tempValue.textContent = "--°C";
     tempIndicator.setAttribute("data-temp", "0");
     tempIndicator.removeAttribute("data-temp-level");

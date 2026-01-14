@@ -19,7 +19,9 @@ esp_err_t temperature_monitor_init() {
     // Range: -10°C to 110°C (supports monitoring up to 100°C+ for CPU junction temperature)
     temperature_sensor_config_t temp_sensor_config = {
         .range_min = -10,
-        .range_max = 110
+        .range_max = 110,
+        .clk_src = TEMPERATURE_SENSOR_CLK_SRC_DEFAULT,
+        .flags = {}
     };
 
     esp_err_t ret = temperature_sensor_install(&temp_sensor_config, &s_temp_sensor);

@@ -370,8 +370,12 @@ static esp_err_t api_info(httpd_req_t* req){
   
   // CPU temperature (TSENS)
   float cpu_temp = 0.0f;
-  if (temperature_monitor_get_cpu_temp(&cpu_temp) == ESP_OK) {
+  esp_err_t temp_err = temperature_monitor_get_cpu_temp(&cpu_temp);
+  if (temp_err == ESP_OK) {
     cJSON_AddNumberToObject(root, "cpu_temp_celsius", cpu_temp);
+  } else {
+    // Always include the field, use -1 to indicate unavailable
+    cJSON_AddNumberToObject(root, "cpu_temp_celsius", -1.0);
   }
   
   // uptime

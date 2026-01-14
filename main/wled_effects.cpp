@@ -1171,10 +1171,12 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   bool ok = false;
   if (use_cache) {
     // Use cached address (much faster - no DNS resolution)
-    ok = ddp_send_frame_cached(&addr_it->second.addr, addr_it->second.addr_len, port, frame, channel, 0, seq_++);
+    // Use complete frame function to handle packet splitting automatically
+    ok = ddp_send_complete_frame_cached(&addr_it->second.addr, addr_it->second.addr_len, port, frame, channel, seq_++);
   } else {
     // First time or cache expired - resolve and cache
-    ok = ddp_send_frame(ip, port, frame, channel, 0, seq_++);
+    // Use complete frame function to handle packet splitting automatically
+    ok = ddp_send_complete_frame(ip, port, frame, channel, seq_++);
     if (ok) {
       // Cache the resolved address for next time
       struct sockaddr_storage addr;
@@ -1368,7 +1370,7 @@ void WledEffectsRuntime::task_loop() {
             const uint32_t channel = static_cast<uint32_t>(binding.segment_index == 0 ? 1 : binding.segment_index);
             
             // Send black frame immediately (don't cache, don't wait)
-            ddp_send_frame(ip, port, black_frame, channel, 0, seq_++);
+            ddp_send_complete_frame(ip, port, black_frame, channel, seq_++);
             
             // Then disable DDP mode
             disable_wled_ddp_mode(ip);
@@ -1604,7 +1606,7 @@ void WledEffectsRuntime::task_loop() {
           const uint16_t port = cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : kDefaultDdpPort;
           const uint32_t channel = static_cast<uint32_t>(m.segment_index == 0 ? 1 : m.segment_index);
             const std::vector<uint8_t> slice(frame.begin() + cursor, frame.begin() + cursor + length * 3);
-            const bool ok = ddp_send_frame(ip, port, slice, channel, 0, seq_++);
+            const bool ok = ddp_send_complete_frame(ip, port, slice, channel, seq_++);
             if (!ok) {
               ESP_LOGW(TAG, "DDP send failed (virtual %s) -> %s:%u", vseg.id.c_str(), ip.c_str(), port);
             }
