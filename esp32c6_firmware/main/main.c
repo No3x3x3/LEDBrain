@@ -811,10 +811,14 @@ void app_main(void)
             ESP_LOGW(TAG, "NAPT enable failed: %s (continuing anyway)", esp_err_to_name(napt_ret));
         }
     } else {
-        if (start_ap) {
-            ESP_LOGI(TAG, "NAPT not enabled - WiFi in AP mode (provisioning)");
+        // In AP-only or STA-not-connected mode, enable NAPT on PPP so AP clients
+        // can still reach the ESP32-P4 web UI through the PPP link.
+        ESP_LOGI(TAG, "WiFi not connected, enabling NAPT for AP->PPP access...");
+        esp_err_t napt_ret = esp_netif_napt_enable(ppp_netif);
+        if (napt_ret == ESP_OK) {
+            ESP_LOGI(TAG, "NAPT enabled - AP clients can reach ESP32-P4 at 192.168.11.2");
         } else {
-            ESP_LOGW(TAG, "NAPT not enabled - WiFi STA not connected");
+            ESP_LOGW(TAG, "NAPT enable failed: %s (AP clients may not reach ESP32-P4)", esp_err_to_name(napt_ret));
         }
     }
 

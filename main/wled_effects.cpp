@@ -1193,9 +1193,9 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   if (cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0) {
     port = cfg_ref_->mqtt.ddp_port;
   }
-  // WLED DDP channel mapping: segment_index 0 = channel 1, segment_index 1 = channel 2, etc.
-  // Channel must be 1-based (WLED requirement)
-  const uint32_t channel = static_cast<uint32_t>(binding.segment_index + 1);
+  // WLED DDP: use channel 0 for default/all segments (WLED ignores non-zero channels unless specifically configured)
+  // LedFX also uses channel 0 for compatibility
+  const uint32_t channel = 0;
   
   // Use cached address if available (faster than DNS resolution every time)
   const uint64_t now_us = esp_timer_get_time();
@@ -1430,9 +1430,8 @@ void WledEffectsRuntime::task_loop() {
             if (cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0) {
               port = cfg_ref_->mqtt.ddp_port;
             }
-            // WLED DDP channel mapping: segment_index 0 = channel 1, segment_index 1 = channel 2, etc.
-  // Channel must be 1-based (WLED requirement)
-  const uint32_t channel = static_cast<uint32_t>(binding.segment_index + 1);
+            // WLED DDP: use channel 0 for default/all segments
+            const uint32_t channel = 0;
             
             // Send black frame immediately (don't cache, don't wait)
             ddp_send_complete_frame(ip, port, black_frame, channel, seq_++);
@@ -1673,7 +1672,7 @@ void WledEffectsRuntime::task_loop() {
             continue;
           }
           const uint16_t port = cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : kDefaultDdpPort;
-          const uint32_t channel = static_cast<uint32_t>(m.segment_index == 0 ? 1 : m.segment_index);
+          const uint32_t channel = 0;  // WLED DDP: use channel 0 for compatibility
             const std::vector<uint8_t> slice(frame.begin() + cursor, frame.begin() + cursor + length * 3);
             const bool ok = ddp_send_complete_frame(ip, port, slice, channel, seq_++);
             if (!ok) {
