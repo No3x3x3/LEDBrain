@@ -180,6 +180,11 @@ static const char* html_page =
 "body{font-family:Arial,sans-serif;max-width:600px;margin:50px auto;padding:20px;background:#f5f5f5;}"
 "h1{color:#333;text-align:center;}"
 ".container{background:white;padding:30px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);}"
+".panel{padding:12px;border:1px solid #cfe2ff;background:#e7f1ff;border-radius:8px;margin:10px 0;}"
+".panel h2{margin:0 0 8px 0;font-size:18px;color:#084298;}"
+".panel p{margin:6px 0;color:#084298;}"
+".panel a{display:inline-block;text-decoration:none;background:#0d6efd;color:#fff;padding:10px 14px;border-radius:6px;}"
+".panel a:hover{background:#0b5ed7;}"
 "button{width:100%;padding:12px;margin:10px 0;background:#007bff;color:white;border:none;border-radius:5px;font-size:16px;cursor:pointer;}"
 "button:hover{background:#0056b3;}"
 "button:disabled{background:#ccc;cursor:not-allowed;}"
@@ -197,6 +202,12 @@ static const char* html_page =
 "<body>"
 "<div class='container'>"
 "<h1>LEDBrain WiFi Setup</h1>"
+"<div class='panel'>"
+"<h2>Panel LEDBrain (ESP32-P4)</h2>"
+"<p>Jeśli jesteś podłączony do sieci <b>LEDBrain-Setup-C6</b>, panel LEDBrain jest pod adresem:</p>"
+"<p><b>http://192.168.11.2/</b></p>"
+"<a href='/ledbrain'>Otwórz panel LEDBrain</a>"
+"</div>"
 "<div id='status' class='status-info' style='display:none;'></div>"
 "<button onclick='scanWiFi()'>Skanuj sieci WiFi</button>"
 "<div id='networks'></div>"
@@ -267,6 +278,13 @@ static const char* html_page =
 static esp_err_t root_get_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, html_page, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t ledbrain_redirect_handler(httpd_req_t *req) {
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.11.2/");
+    httpd_resp_send(req, "Redirecting to LEDBrain UI...", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
@@ -389,7 +407,7 @@ static esp_err_t api_wifi_connect_handler(httpd_req_t *req) {
 static httpd_handle_t start_web_server(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 3;
+    config.max_uri_handlers = 4;
     
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -399,6 +417,13 @@ static httpd_handle_t start_web_server(void) {
             .handler = root_get_handler,
         };
         httpd_register_uri_handler(server, &root);
+
+        httpd_uri_t ledbrain = {
+            .uri = "/ledbrain",
+            .method = HTTP_GET,
+            .handler = ledbrain_redirect_handler,
+        };
+        httpd_register_uri_handler(server, &ledbrain);
         
         httpd_uri_t scan = {
             .uri = "/api/wifi/scan",
