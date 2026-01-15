@@ -396,14 +396,15 @@ static esp_err_t api_factory_reset(httpd_req_t* req) {
 // Returns usage as percentage (0-100) for each core
 // Uses FreeRTOS task runtime statistics
 static void get_cpu_usage(float* core0_usage, float* core1_usage) {
+  // Initialize to -1 (invalid/unavailable)
+  *core0_usage = -1.0f;
+  *core1_usage = -1.0f;
+
+#if configUSE_TRACE_FACILITY && configGENERATE_RUN_TIME_STATS
   // Static variables to track previous measurements
   static uint32_t last_idle_runtime_core0 = 0;
   static uint32_t last_idle_runtime_core1 = 0;
   static uint64_t last_measurement_time_us = 0;
-  
-  // Initialize to -1 (invalid/unavailable)
-  *core0_usage = -1.0f;
-  *core1_usage = -1.0f;
   
   // Get task count
   UBaseType_t num_tasks = uxTaskGetNumberOfTasks();
@@ -440,7 +441,8 @@ static void get_cpu_usage(float* core0_usage, float* core1_usage) {
   }
   
   // Find idle tasks for each core
-  // ESP32-P4 has two idle tasks: "IDLE0" (Core 0) and "IDLE1" (Core 1)
+  // ESP32-P4 SMP idle tasks: IDLE0 for core 0, IDLE1 for core 1
+  // Or just "IDLE" with number suffix
   uint32_t idle_runtime_core0 = 0;
   uint32_t idle_runtime_core1 = 0;
   
@@ -448,31 +450,32 @@ static void get_cpu_usage(float* core0_usage, float* core1_usage) {
     const char* task_name = task_array[i].pcTaskName;
     uint32_t runtime = task_array[i].ulRunTimeCounter;
     
-    // ESP32-P4 idle tasks are named "IDLE" or "IDLE0"/"IDLE1"
-    // Check for Core 0 idle task
-    if (strcmp(task_name, "IDLE") == 0 || strcmp(task_name, "IDLE0") == 0 || 
-        (strstr(task_name, "IDLE") != nullptr && strstr(task_name, "0") != nullptr)) {
+    // Check task name for idle tasks
+    // ESP-IDF SMP names idle tasks as "IDLE0" and "IDLE1"
+    if (strcmp(task_name, "IDLE0") == 0 || strcmp(task_name, "IDLE_0") == 0) {
       idle_runtime_core0 = runtime;
-    }
-    // Check for Core 1 idle task
-    else if (strcmp(task_name, "IDLE1") == 0 || 
-             (strstr(task_name, "IDLE") != nullptr && strstr(task_name, "1") != nullptr && 
-              strstr(task_name, "0") == nullptr)) {
+    } else if (strcmp(task_name, "IDLE1") == 0 || strcmp(task_name, "IDLE_1") == 0) {
       idle_runtime_core1 = runtime;
     }
   }
   
-  // If we didn't find separate idle tasks, try to find single "IDLE" task
-  // In that case, we can't distinguish between cores, so we'll split it
+  // Fallback: if not found by exact name, search for any IDLE tasks
   if (idle_runtime_core0 == 0 && idle_runtime_core1 == 0) {
+    int idle_count = 0;
     for (UBaseType_t i = 0; i < actual_count; ++i) {
       const char* task_name = task_array[i].pcTaskName;
-      if (strstr(task_name, "IDLE") != nullptr || strstr(task_name, "idle") != nullptr) {
-        // Split idle time evenly between cores (fallback)
-        idle_runtime_core0 = task_array[i].ulRunTimeCounter / 2;
-        idle_runtime_core1 = task_array[i].ulRunTimeCounter / 2;
-        break;
+      if (strstr(task_name, "IDLE") != nullptr) {
+        if (idle_count == 0) {
+          idle_runtime_core0 = task_array[i].ulRunTimeCounter;
+        } else if (idle_count == 1) {
+          idle_runtime_core1 = task_array[i].ulRunTimeCounter;
+        }
+        idle_count++;
       }
+    }
+    // If only one IDLE task found, split between cores
+    if (idle_count == 1 && idle_runtime_core1 == 0) {
+      idle_runtime_core1 = idle_runtime_core0;
     }
   }
   
@@ -496,20 +499,15 @@ static void get_cpu_usage(float* core0_usage, float* core1_usage) {
         idle_delta_core1 = idle_runtime_core1 - last_idle_runtime_core1;
       }
       
-      // Convert ticks to percentage
-      float ticks_per_second = 1000.0f;  // Default: 1000 Hz (1ms per tick)
-      #ifdef portTICK_PERIOD_MS
-      if (portTICK_PERIOD_MS > 0) {
-        ticks_per_second = 1000.0f / static_cast<float>(portTICK_PERIOD_MS);
-      }
-      #endif
-      float max_possible_ticks = ticks_per_second * time_delta_s;
+      // Runtime counter uses esp_timer (microseconds) when CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
+      // time_delta_us is already in microseconds, and ulRunTimeCounter is also in microseconds
+      // So idle_delta is in microseconds, and we compare to time_delta_us directly
       
-      if (max_possible_ticks > 0) {
+      if (time_delta_us > 0) {
         // Calculate idle percentage, then convert to usage percentage
         // Usage = 100% - idle_percentage
-        float idle_percent_core0 = (static_cast<float>(idle_delta_core0) / max_possible_ticks) * 100.0f;
-        float idle_percent_core1 = (static_cast<float>(idle_delta_core1) / max_possible_ticks) * 100.0f;
+        float idle_percent_core0 = (static_cast<float>(idle_delta_core0) / static_cast<float>(time_delta_us)) * 100.0f;
+        float idle_percent_core1 = (static_cast<float>(idle_delta_core1) / static_cast<float>(time_delta_us)) * 100.0f;
         
         float usage_core0 = 100.0f - idle_percent_core0;
         float usage_core1 = 100.0f - idle_percent_core1;
@@ -526,6 +524,7 @@ static void get_cpu_usage(float* core0_usage, float* core1_usage) {
   last_measurement_time_us = current_time_us;
   
   vPortFree(task_array);
+#endif  // configUSE_TRACE_FACILITY && configGENERATE_RUN_TIME_STATS
 }
 
 static esp_err_t api_logs(httpd_req_t* req) {
@@ -1040,17 +1039,41 @@ static esp_err_t api_led_state_get(httpd_req_t* req) {
 
 static esp_err_t api_wled_effects_save(httpd_req_t* req) {
   auto body = read_body(req);
+  ESP_LOGI(TAG, "api_wled_effects_save: received %zu bytes: %.200s", body.size(), body.c_str());
   if (body.empty()) {
     return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty payload");
   }
+  
+  // Log devices before applying
+  ESP_LOGI(TAG, "api_wled_effects_save: BEFORE - %zu devices:", s_cfg->wled_devices.size());
+  for (const auto& d : s_cfg->wled_devices) {
+    ESP_LOGI(TAG, "  device: id=%s addr=%s", d.id.c_str(), d.address.c_str());
+  }
+  
   if (config_apply_json(*s_cfg, body.c_str(), body.size()) != ESP_OK) {
+    ESP_LOGE(TAG, "api_wled_effects_save: config_apply_json failed");
     return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid json");
   }
+  
+  // Log after applying
+  ESP_LOGI(TAG, "api_wled_effects_save: AFTER - %zu devices, %zu bindings", 
+           s_cfg->wled_devices.size(), s_cfg->wled_effects.bindings.size());
+  for (const auto& d : s_cfg->wled_devices) {
+    ESP_LOGI(TAG, "  device: id=%s addr=%s", d.id.c_str(), d.address.c_str());
+  }
+  for (const auto& b : s_cfg->wled_effects.bindings) {
+    ESP_LOGI(TAG, "  binding: device=%s enabled=%d ddp=%d effect=%s", 
+             b.device_id.c_str(), b.enabled ? 1 : 0, b.ddp ? 1 : 0, b.effect.effect.c_str());
+  }
+  
   if (config_save(*s_cfg) != ESP_OK) {
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "persist failed");
   }
   if (s_wled_fx_runtime) {
     s_wled_fx_runtime->update_config(*s_cfg);
+    ESP_LOGI(TAG, "api_wled_effects_save: runtime updated");
+  } else {
+    ESP_LOGW(TAG, "api_wled_effects_save: s_wled_fx_runtime is NULL!");
   }
   httpd_resp_sendstr(req, "OK");
   return ESP_OK;

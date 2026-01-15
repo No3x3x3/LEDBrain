@@ -2459,22 +2459,24 @@ button.icon-refresh:hover svg {
 .preview-device-canvas-container {
   position: relative;
   width: 100%;
-  height: 120px;
-  background: rgba(10, 15, 24, 0.6);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 168, 230, 0.15);
+  height: 80px;
+  background: linear-gradient(180deg, #0a0a0f 0%, #0d0d14 50%, #0a0a0f 100%);
+  border-radius: 16px;
+  border: 1px solid rgba(60, 60, 80, 0.3);
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 
+    inset 0 2px 8px rgba(0, 0, 0, 0.5),
+    inset 0 -1px 4px rgba(255, 255, 255, 0.02),
+    0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .preview-device-canvas {
   width: 100%;
   height: 100%;
   display: block;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
 }
 
 .preview-device-actions {
@@ -2513,6 +2515,35 @@ button.icon-refresh:hover svg {
   gap: 0.5rem;
   padding: 3rem 1rem;
   text-align: center;
+}
+
+.inline-effect-panel {
+  margin-top: 1rem;
+}
+
+.inline-effect-panel .card {
+  background: rgba(34, 9, 41, 0.85);
+  border: 1px solid rgba(255, 168, 230, 0.3);
+}
+
+.inline-effect-panel .form-row {
+  display: flex;
+  gap: 1rem;
+}
+
+.inline-effect-panel .form-group {
+  margin-bottom: 0.75rem;
+}
+
+.inline-effect-panel label {
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.inline-effect-panel select,
+.inline-effect-panel input[type="range"] {
+  width: 100%;
 }
 
 .preview-empty p {

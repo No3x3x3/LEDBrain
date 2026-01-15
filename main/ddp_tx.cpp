@@ -8,6 +8,7 @@
 #include "eth_init.hpp"  // For extern esp_netif_t* netif
 #include <cmath>
 #include <unistd.h>
+#include <fcntl.h>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -21,22 +22,25 @@ static uint64_t s_tx_bytes = 0;
 static uint64_t s_rx_bytes = 0;  // For future use (audio receive)
 
 #pragma pack(push, 1)
-// DDP Header structure (14 bytes - standard DDP format)
-// WLED supports standard 14-byte DDP header (timecode field is present but ignored by WLED)
+// DDP Header structure (10 bytes - WLED compatible format)
+// WLED uses 10-byte DDP header (without optional timecode)
+// Reference: https://kno.wled.ge/interfaces/ddp/
 struct DDPHeader {
-    uint8_t flags;       // Bit 0: push (1=push, 0=hold), Bit 1: query, Bits 2-3: version (01=v1)
-                         // 0x41 = push(1) + version(01) = 01000001
-    uint8_t seq;         // Sequence number (0..255)
-    uint16_t data_type;  // 0x0000 = RGB/RGBW raw data (big-endian)
-    uint32_t channel;    // Destination ID / Channel (1-based, big-endian)
-    uint32_t data_offset;// Data offset in bytes (big-endian)
+    uint8_t flags;       // Bit 0: push (1=push, 0=hold), Bits 6-7: version (01=v1)
+                         // 0x41 = version(01) + push(1) = 01000001
+    uint8_t seq;         // Sequence number (4-bit, 1-15, upper 4 bits unused)
+    uint8_t data_type;   // Pixel format: 0x00 = undefined (use device default), typically RGB
+    uint8_t dest_id;     // Destination/Output ID (1 = default)
+    uint32_t data_offset;// Offset in LED array (big-endian, in bytes)
     uint16_t data_len;   // Payload length in bytes (big-endian)
-    // Note: Timecode (4 bytes) is optional and WLED ignores it, so we omit it
-    // Total: 1 + 1 + 2 + 4 + 4 + 2 = 14 bytes
+    // Total: 1 + 1 + 1 + 1 + 4 + 2 = 10 bytes
 };
 #pragma pack(pop)
 
 namespace {
+
+// Static socket for reuse - avoid creating new socket for each frame
+static int s_ddp_sock = -1;
 
 bool ddp_send_frame_internal(const struct sockaddr* addr,
                               socklen_t addr_len,
@@ -47,92 +51,17 @@ bool ddp_send_frame_internal(const struct sockaddr* addr,
                               uint32_t data_offset,
                               uint8_t seq,
                               bool push_flag) {
-    int sock = socket(addr->sa_family, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        ESP_LOGE(TAG, "Unable to create UDP socket");
-        return false;
-    }
-    
-    // Determine which network interface to use based on target IP routing
-    // For Ethernet devices: use Ethernet netif
-    // For WiFi devices: use WiFi netif (PPPOS)
-    // We'll use the default netif and let the system route, but log which interface we're using
-    esp_netif_t* eth_netif = nullptr;
-    esp_netif_t* wifi_netif = nullptr;
-    
-    // Get Ethernet netif (from eth_init.cpp via eth_init.hpp)
-    // netif is declared as extern in eth_init.hpp
-    if (netif) {
-        esp_netif_ip_info_t ip_info;
-        if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
-            eth_netif = netif;
+    // Reuse socket if possible (much faster than creating new socket each frame)
+    if (s_ddp_sock < 0) {
+        s_ddp_sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (s_ddp_sock < 0) {
+            ESP_LOGE(TAG, "Unable to create UDP socket");
+            return false;
         }
-    }
-    
-    // Get WiFi netif (PPPOS from wifi_c6.cpp)
-    // Access WiFi netif via esp_netif_get_handle_from_ifkey for PPPOS
-    esp_netif_t* pppos_netif = esp_netif_get_handle_from_ifkey("PPPOS");
-    if (pppos_netif) {
-        esp_netif_ip_info_t ip_info;
-        if (esp_netif_get_ip_info(pppos_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
-            wifi_netif = pppos_netif;
-        }
-    }
-    
-    // Determine which interface to use based on target IP subnet
-    // Check if target IP is in Ethernet subnet or WiFi subnet
-    esp_netif_t* target_netif = nullptr;
-    const char* if_type = "Unknown";
-    
-    if (addr->sa_family == AF_INET) {
-        const struct sockaddr_in* addr_in = reinterpret_cast<const struct sockaddr_in*>(addr);
-        uint32_t target_ip = ntohl(addr_in->sin_addr.s_addr);
-        
-        // Check Ethernet subnet
-        if (eth_netif) {
-            esp_netif_ip_info_t eth_info;
-            if (esp_netif_get_ip_info(eth_netif, &eth_info) == ESP_OK && eth_info.ip.addr != 0) {
-                uint32_t eth_ip = ntohl(eth_info.ip.addr);
-                uint32_t eth_mask = ntohl(eth_info.netmask.addr);
-                if ((target_ip & eth_mask) == (eth_ip & eth_mask)) {
-                    target_netif = eth_netif;
-                    if_type = "Ethernet";
-                }
-            }
-        }
-        
-        // Check WiFi subnet if not matched to Ethernet
-        if (!target_netif && wifi_netif) {
-            esp_netif_ip_info_t wifi_info;
-            if (esp_netif_get_ip_info(wifi_netif, &wifi_info) == ESP_OK && wifi_info.ip.addr != 0) {
-                uint32_t wifi_ip = ntohl(wifi_info.ip.addr);
-                uint32_t wifi_mask = ntohl(wifi_info.netmask.addr);
-                if ((target_ip & wifi_mask) == (wifi_ip & wifi_mask)) {
-                    target_netif = wifi_netif;
-                    if_type = "WiFi (PPPOS)";
-                }
-            }
-        }
-        
-        // Fallback to default netif if subnet doesn't match
-        if (!target_netif) {
-            target_netif = esp_netif_get_default_netif();
-            if (!target_netif) {
-                target_netif = eth_netif ? eth_netif : wifi_netif;
-            }
-            if_type = "Default";
-        }
-    }
-    
-    // Log which interface we're using
-    if (target_netif) {
-        esp_netif_ip_info_t ip_info;
-        if (esp_netif_get_ip_info(target_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
-            ESP_LOGI(TAG, "DDP routing via %s interface with IP " IPSTR " to target %s:%u", 
-                     if_type, IP2STR(&ip_info.ip),
-                     addr->sa_family == AF_INET ? 
-                       inet_ntoa(reinterpret_cast<const struct sockaddr_in*>(addr)->sin_addr) : "?",
-                     port);
+        // Set socket to non-blocking for faster sends
+        int flags = fcntl(s_ddp_sock, F_GETFL, 0);
+        if (flags >= 0) {
+            fcntl(s_ddp_sock, F_SETFL, flags | O_NONBLOCK);
         }
     }
     
@@ -149,17 +78,15 @@ bool ddp_send_frame_internal(const struct sockaddr* addr,
     std::vector<uint8_t> buf(sizeof(DDPHeader) + bytes);
     auto* h = reinterpret_cast<DDPHeader*>(buf.data());
     
-    // Set DDP header fields
-    // Flags: Bit 0 = push (1=push/display, 0=hold), Bits 2-3 = version (01=v1)
-    // Push flag should be set ONLY on the last packet of a frame
-    // 0x41 = push(1) + version(01) = 01000001 binary
-    // 0x40 = hold(0) + version(01) = 01000000 binary (for intermediate packets)
-    h->flags = push_flag ? 0x41 : 0x40;  // Push flag: 0x41 = push (display), 0x40 = hold (buffer)
-    h->seq = seq;
-    h->data_type = htons(0x0000);  // 0x0000 = RGB/RGBW raw data
-    h->channel = htonl(channel);
-    h->data_offset = htonl(data_offset);
-    h->data_len = htons(static_cast<uint16_t>(bytes));
+    // Set DDP header fields (10-byte WLED format)
+    // Flags: version 1 (0x40) + push flag (0x01) when last packet
+    // Same as LedFX: 0x41 = push, 0x40 = no push
+    h->flags = push_flag ? 0x41 : 0x40;
+    h->seq = seq & 0x0F;  // 4-bit sequence like LedFX
+    h->data_type = 0x01;  // 0x01 = RGB, 8 bits per channel (same as LedFX)
+    h->dest_id = 1;  // Default destination
+    h->data_offset = htonl(data_offset);  // Offset in bytes (big-endian)
+    h->data_len = htons(static_cast<uint16_t>(bytes));  // Payload length (big-endian)
 
     if (bytes > 0 && payload) {
         // Copy RGB data from render buffer to DDP payload
@@ -167,36 +94,38 @@ bool ddp_send_frame_internal(const struct sockaddr* addr,
         memcpy(buf.data() + sizeof(DDPHeader), payload, bytes);
     }
 
-    // Send DDP packet with proper port set
-    int sent = sendto(sock, buf.data(), buf.size(), 0, final_addr, addr_len);
-    if (sent < 0) {
-        ESP_LOGE(TAG, "DDP send error (errno=%d, %s)", errno, strerror(errno));
-        close(sock);
-        return false;
-    }
+    // Send DDP packet with proper port set (use persistent socket)
+    int sent = sendto(s_ddp_sock, buf.data(), buf.size(), 0, final_addr, addr_len);
     
-    // Log successful send - use DEBUG level (can be enabled for troubleshooting)
-    // Only log first packet of frame or errors
-    if (sent > 0 && (data_offset == 0 || !push_flag)) {
-        ESP_LOGD(TAG, "DDP sent %d bytes to %s:%u (channel=%lu, offset=%lu, push=%d, seq=%u)", 
-                 sent, 
-                 addr->sa_family == AF_INET ? 
-                   inet_ntoa(reinterpret_cast<const struct sockaddr_in*>(addr)->sin_addr) : "?",
-                 port, static_cast<unsigned long>(channel), static_cast<unsigned long>(data_offset), 
-                 push_flag ? 1 : 0, static_cast<unsigned>(seq));
+    static uint32_t s_send_count = 0;
+    static uint32_t s_fail_count = 0;
+    s_send_count++;
+    
+    if (sent < 0) {
+        s_fail_count++;
+        // On error, close and invalidate socket so it gets recreated next time
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            ESP_LOGE(TAG, "DDP send error (errno=%d, %s)", errno, strerror(errno));
+            close(s_ddp_sock);
+            s_ddp_sock = -1;
+        }
+        return false;
     }
 
     // Track bytes sent
     if (sent > 0) {
         s_tx_bytes += static_cast<uint64_t>(sent);
     }
-
-    // Verify packet was sent completely
-    if (sent != static_cast<int>(buf.size())) {
-        ESP_LOGW(TAG, "DDP partial send: %d/%zu bytes", sent, buf.size());
+    
+    // Log every 60 packets (~1 second at 60fps)
+    if (s_send_count % 60 == 0) {
+        ESP_LOGI(TAG, "DDP stats: sent=%lu, fails=%lu, bytes=%lu, last_pkt=%d bytes (flags=0x%02X seq=%d type=%d)",
+                 (unsigned long)s_send_count, (unsigned long)s_fail_count, 
+                 (unsigned long)s_tx_bytes, sent,
+                 h->flags, h->seq, h->data_type);
     }
 
-    close(sock);
+    // Don't close socket - reuse it for next frame
     return sent == static_cast<int>(buf.size());
 }
 

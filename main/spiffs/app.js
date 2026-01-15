@@ -1227,6 +1227,10 @@ function buildPhysicalSegmentsSummary() {
         effect: fx?.effect || "",
         audio_link: !!fx?.audio_link,
         enabled: seg.enabled !== false,
+        matrix_enabled: seg.matrix_enabled || false,
+        matrix: seg.matrix || { width: 0, height: 0, serpentine: true, vertical: false },
+        reverse: seg.reverse || false,
+        mirror: seg.mirror || false,
       };
     })
     .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
@@ -1456,7 +1460,11 @@ function renderDevicePreview() {
       effect: seg.effect || assignment?.effect || null,
       enabled: seg.enabled !== false,
       binding: assignment,  // Store effect assignment for colors/brightness
-      data: seg
+      data: seg,
+      matrix_enabled: seg.matrix_enabled || false,
+      matrix: seg.matrix || null,
+      reverse: seg.reverse || false,
+      mirror: seg.mirror || false
     });
   });
   
@@ -1512,8 +1520,26 @@ function renderDevicePreview() {
     
     const canvas = document.createElement("canvas");
     canvas.className = "preview-device-canvas";
-    canvas.width = 280;
-    canvas.height = 120;
+    
+    // Adjust canvas size for matrix layout
+    const hasMatrix = device.matrix_enabled && device.matrix && device.matrix.width > 0 && device.matrix.height > 0;
+    if (hasMatrix) {
+      const mW = device.matrix.width;
+      const mH = device.matrix.height;
+      const maxSize = 280;
+      const ratio = mW / mH;
+      if (ratio >= 1) {
+        canvas.width = maxSize;
+        canvas.height = Math.max(60, Math.floor(maxSize / ratio));
+      } else {
+        canvas.height = maxSize;
+        canvas.width = Math.max(60, Math.floor(maxSize * ratio));
+      }
+    } else {
+      canvas.width = 280;
+      canvas.height = 120;
+    }
+    
     canvas.dataset.deviceId = device.id;
     canvasContainer.appendChild(canvas);
     
@@ -1708,6 +1734,17 @@ let previewFrameIndex = 0;
 let previewStartTime = null;
 const PREVIEW_FPS = 30; // Limit preview to 30 FPS for smoother animation
 
+// Persistent effect state for animations that need memory (Fire 2012, etc.)
+const previewEffectState = {};
+
+function getPreviewEffectState(deviceId, effectName, size) {
+  const key = `${deviceId}_${effectName}_${size}`;
+  if (!previewEffectState[key]) {
+    previewEffectState[key] = new Uint8Array(size);
+  }
+  return previewEffectState[key];
+}
+
 function startPreviewAnimation() {
   if (previewAnimationFrame) {
     cancelAnimationFrame(previewAnimationFrame);
@@ -1859,60 +1896,159 @@ function renderPreviewFrame(canvas, device, frameIndex) {
   
   // Get brightness (0-1)
   const brightness = effectConfig.brightness ? Math.min(1, effectConfig.brightness / 255) : 1;
-  const intensity = effectConfig.intensity ? effectConfig.intensity / 255 : 0.5;
+  const intensityVal = effectConfig.intensity ? effectConfig.intensity / 255 : 0.5;
   const speed = effectConfig.speed ? 0.02 + (effectConfig.speed / 255) * 0.25 : 0.1;
   
-  const pixelWidth = width / leds;
   const effectLower = effect.toLowerCase();
   
+  // Check for matrix layout
+  const matrixEnabled = device.matrix_enabled && device.matrix && device.matrix.width > 0 && device.matrix.height > 0;
+  const matrixW = matrixEnabled ? device.matrix.width : leds;
+  const matrixH = matrixEnabled ? device.matrix.height : 1;
+  const serpentine = matrixEnabled ? (device.matrix.serpentine !== false) : false;
+  const vertical = matrixEnabled ? (device.matrix.vertical || false) : false;
+  
+  // Helper to get 2D coordinates from LED index
+  const getLedCoords = (ledIdx) => {
+    if (!matrixEnabled) {
+      return { col: ledIdx, row: 0, colNorm: ledIdx / leds, rowNorm: 0 };
+    }
+    let row, col;
+    if (vertical) {
+      col = Math.floor(ledIdx / matrixH);
+      row = ledIdx % matrixH;
+      if (serpentine && col % 2 === 1) row = matrixH - 1 - row;
+    } else {
+      row = Math.floor(ledIdx / matrixW);
+      col = ledIdx % matrixW;
+      if (serpentine && row % 2 === 1) col = matrixW - 1 - col;
+    }
+    return { 
+      col: col, 
+      row: row, 
+      colNorm: col / Math.max(1, matrixW - 1), 
+      rowNorm: row / Math.max(1, matrixH - 1) 
+    };
+  };
+  
+  // Calculate LED colors
+  const ledColors = [];
   for (let i = 0; i < leds; i++) {
     let r = 0, g = 0, b = 0;
     const pos = i / leds;
+    const coords = getLedCoords(i);
     
     if (effectLower.includes("rainbow")) {
-      const hue = ((pos * 360 + frameIndex * speed * 10) % 360) / 360;
+      const hueBase = matrixEnabled ? (coords.colNorm + coords.rowNorm) * 0.5 : pos;
+      const hue = ((hueBase * 360 + frameIndex * speed * 10) % 360) / 360;
       const rgb = hslToRgb(hue, 1, 0.5);
-      r = rgb[0];
-      g = rgb[1];
-      b = rgb[2];
+      r = rgb[0]; g = rgb[1]; b = rgb[2];
     } else if (effectLower.includes("solid")) {
-      // Solid color with slight pulse
       const pulse = 0.8 + Math.sin(frameIndex * speed * 5) * 0.2;
-      r = c1.r * pulse;
-      g = c1.g * pulse;
-      b = c1.b * pulse;
+      r = c1.r * pulse; g = c1.g * pulse; b = c1.b * pulse;
     } else if (effectLower.includes("fire")) {
-      const intensity = Math.sin((pos * Math.PI * 2 + frameIndex * speed * 2) * 0.5) * 0.5 + 0.5;
-      r = Math.floor(c1.r * intensity);
-      g = Math.floor(c1.g * intensity * 0.4);
-      b = Math.floor(c1.b * intensity * 0.1);
+      // Fire 2012 algorithm - authentic WLED/FastLED implementation
+      // This is calculated once per frame, not per LED
+      if (i === 0) {
+        // Get or create heat array for this device
+        const numColumns = matrixEnabled ? matrixW : 1;
+        const numRows = matrixEnabled ? matrixH : leds;
+        const speedVal = effectConfig.speed || 128;
+        const intensityVal2 = effectConfig.intensity || 128;
+        
+        // Process each column independently for matrix
+        for (let col = 0; col < numColumns; col++) {
+          const heatKey = `fire_${device.id}_col${col}`;
+          if (!previewEffectState[heatKey]) {
+            previewEffectState[heatKey] = new Uint8Array(numRows);
+          }
+          const heat = previewEffectState[heatKey];
+          
+          // COOLING and SPARKING parameters like WLED
+          const COOLING = 55 + Math.floor(speedVal / 4);
+          const SPARKING = 80 + Math.floor(intensityVal2 / 2);
+          
+          // Step 1: Cool down every cell
+          for (let row = 0; row < numRows; row++) {
+            const cooldown = Math.floor(Math.random() * (((COOLING * 10) / numRows) + 2));
+            heat[row] = heat[row] > cooldown ? heat[row] - cooldown : 0;
+          }
+          
+          // Step 2: Heat drifts up and diffuses
+          for (let row = numRows - 1; row >= 2; row--) {
+            heat[row] = Math.floor((heat[row - 1] + heat[row - 2] + heat[row - 2]) / 3);
+          }
+          
+          // Step 3: Randomly ignite sparks near bottom
+          if (Math.floor(Math.random() * 256) < SPARKING) {
+            const y = Math.floor(Math.random() * Math.min(7, numRows));
+            let newHeat = heat[y] + 140 + Math.floor(Math.random() * 80);
+            heat[y] = newHeat > 220 ? 220 : newHeat;
+          }
+        }
+      }
+      
+      // Now get the heat value for this LED
+      const numColumns = matrixEnabled ? matrixW : 1;
+      const numRows = matrixEnabled ? matrixH : leds;
+      const col = matrixEnabled ? coords.col : 0;
+      const row = matrixEnabled ? coords.row : i;
+      
+      const heatKey = `fire_${device.id}_col${col}`;
+      const heat = previewEffectState[heatKey];
+      
+      if (heat) {
+        // Fire rises from bottom, so invert row index
+        const heatIdx = numRows - 1 - row;
+        const temperature = heat[Math.min(heatIdx, numRows - 1)] || 0;
+        
+        // HeatColor conversion (WLED style)
+        const t192 = temperature > 0 ? Math.floor((temperature * 191) / 255) + 1 : 0;
+        let heatramp = (t192 & 0x3F) << 2;
+        
+        if (t192 > 0xA0) {
+          // Hottest - yellow/white
+          r = 255; g = 255; b = Math.floor(heatramp / 2);
+        } else if (t192 > 0x50) {
+          // Middle - orange/yellow
+          r = 255; g = heatramp; b = 0;
+        } else {
+          // Coolest - red/dark
+          r = heatramp; g = 0; b = 0;
+        }
+      }
     } else if (effectLower.includes("wave") || effectLower.includes("flow")) {
-      const wave = Math.sin((pos * Math.PI * 4 + frameIndex * speed * 3)) * 0.5 + 0.5;
+      const wavePos = matrixEnabled ? coords.colNorm : pos;
+      const wave = Math.sin((wavePos * Math.PI * 4 + frameIndex * speed * 3)) * 0.5 + 0.5;
       r = c1.r * (1 - wave) + c2.r * wave;
       g = c1.g * (1 - wave) + c2.g * wave;
       b = c1.b * (1 - wave) + c2.b * wave;
     } else if (effectLower.includes("chase") || effectLower.includes("theater")) {
+      const chasePos = matrixEnabled ? coords.colNorm : pos;
       const move = (frameIndex * speed * 5) % 1;
-      const dist = Math.abs(pos - move);
+      const dist = Math.abs(chasePos - move);
       const level = dist < 0.1 ? 1 : (dist < 0.2 ? 0.5 : 0);
-      r = c1.r * level;
-      g = c1.g * level;
-      b = c1.b * level;
+      r = c1.r * level; g = c1.g * level; b = c1.b * level;
     } else if (effectLower.includes("meteor")) {
-      const move = (frameIndex * speed * 3) % 1;
-      const dist = Math.abs(pos - move);
-      const level = dist < 0.15 ? (1 - dist / 0.15) : 0;
-      r = c1.r * level;
-      g = c1.g * level;
-      b = c1.b * level;
+      if (matrixEnabled) {
+        const meteorRow = (frameIndex * speed * 3) % 1;
+        const dist = Math.abs(coords.rowNorm - meteorRow);
+        const level = dist < 0.15 ? (1 - dist / 0.15) : 0;
+        r = c1.r * level; g = c1.g * level; b = c1.b * level;
+      } else {
+        const move = (frameIndex * speed * 3) % 1;
+        const dist = Math.abs(pos - move);
+        const level = dist < 0.15 ? (1 - dist / 0.15) : 0;
+        r = c1.r * level; g = c1.g * level; b = c1.b * level;
+      }
     } else if (effectLower.includes("rain")) {
-      const drop = Math.sin((pos * 10 + frameIndex * speed * 2) % Math.PI) * 0.5 + 0.5;
-      r = c1.r * drop;
-      g = c1.g * drop;
-      b = c1.b * drop;
+      const rainPos = matrixEnabled ? coords.rowNorm : pos;
+      const drop = Math.sin((rainPos * 10 + frameIndex * speed * 2) % Math.PI) * 0.5 + 0.5;
+      r = c1.r * drop; g = c1.g * drop; b = c1.b * drop;
     } else {
       // Default: gradient flow
-      const t = (pos + frameIndex * speed * 0.5) % 1;
+      const gradPos = matrixEnabled ? coords.colNorm : pos;
+      const t = (gradPos + frameIndex * speed * 0.5) % 1;
       const mix = Math.sin(t * Math.PI * 2) * 0.5 + 0.5;
       r = c1.r * (1 - t) + c2.r * t;
       g = c1.g * (1 - t) + c2.g * t;
@@ -1922,10 +2058,10 @@ function renderPreviewFrame(canvas, device, frameIndex) {
       b = b * (1 - mix) + c3.b * mix;
     }
     
-    // Apply brightness
-    r = Math.floor(r * brightness);
-    g = Math.floor(g * brightness);
-    b = Math.floor(b * brightness);
+    // Apply brightness and clamp
+    r = Math.max(0, Math.min(255, Math.floor(r * brightness)));
+    g = Math.max(0, Math.min(255, Math.floor(g * brightness)));
+    b = Math.max(0, Math.min(255, Math.floor(b * brightness)));
     
     // Ensure minimum visibility
     if (r === 0 && g === 0 && b === 0 && brightness > 0) {
@@ -1934,8 +2070,25 @@ function renderPreviewFrame(canvas, device, frameIndex) {
       b = Math.floor(c1.b * brightness * 0.1);
     }
     
-    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(i * pixelWidth, 0, pixelWidth, height);
+    ledColors.push({ r: r, g: g, b: b, col: coords.col, row: coords.row });
+  }
+  
+  // Render LEDs based on layout
+  if (matrixEnabled) {
+    const cellW = width / matrixW;
+    const cellH = height / matrixH;
+    for (let i = 0; i < ledColors.length; i++) {
+      const led = ledColors[i];
+      ctx.fillStyle = `rgb(${led.r}, ${led.g}, ${led.b})`;
+      ctx.fillRect(led.col * cellW, led.row * cellH, cellW, cellH);
+    }
+  } else {
+    const pixelWidth = width / leds;
+    for (let i = 0; i < ledColors.length; i++) {
+      const led = ledColors[i];
+      ctx.fillStyle = `rgb(${led.r}, ${led.g}, ${led.b})`;
+      ctx.fillRect(i * pixelWidth, 0, pixelWidth, height);
+    }
   }
 }
 
@@ -2249,6 +2402,16 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
           </select>
           <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_direction_desc") || "Which direction the effect moves along the LED strip"}</small>
         </label>
+        <label class="switch">
+          <input type="checkbox" id="devFxReverse" ${assignment.reverse ? "checked" : ""}>
+          <span></span> ${t("fx_reverse_label") || "Reverse"}
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_reverse_desc") || "Reverse the LED order for this effect"}</small>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="devFxMirror" ${assignment.mirror ? "checked" : ""}>
+          <span></span> ${t("fx_mirror_label") || "Mirror"}
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_mirror_desc") || "Mirror the effect (duplicate from center)"}</small>
+        </label>
         <label>${t("fx_scatter_label") || "Randomness / Particle Spread"}
           <input type="number" id="devFxScatter" min="0" max="100" step="1" value="${assignment.scatter ?? 0}">
           <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_scatter_desc") || "How random/spread out the effect particles are (0-100, 0 = uniform, 100 = very random)"}</small>
@@ -2263,15 +2426,10 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
         </label>
       </div>
     </details>
-    <details class="fx-section-category" ${assignment.audio_link && assignment.engine !== "wled" ? "open" : ""}>
+    ${assignment.engine !== "wled" ? `
+    <details class="fx-section-category" open>
       <summary class="fx-section-header">${t("fx_audio_title") || "Audio Reactive"}</summary>
       <div class="form-grid" style="margin-top: 1rem;">
-        <label class="switch">
-          <input type="checkbox" id="devFxAudioLink" ${assignment.audio_link ? "checked" : ""} ${assignment.engine === "wled" ? "disabled" : ""}>
-          <span></span> ${t("fx_audio_link_label") || "Enable Audio Reactivity"}
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${assignment.engine === "wled" ? (t("fx_audio_only_ledfx") || "Only available for LEDFx effects") : (t("fx_audio_link_desc") || "Make the effect respond to music/audio input")}</small>
-        </label>
-        ${assignment.audio_link && assignment.engine !== "wled" ? `
         <label>${t("fx_audio_profile_label") || "Audio Response Profile"}
           <select id="devFxAudioProfile" ${assignment.engine === "wled" ? "disabled" : ""}>
             ${renderAudioProfileOptions(assignment.audio_profile || "default")}
@@ -2337,14 +2495,15 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
               `).join("");
             })()}
           </div>
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${assignment.engine === "wled" ? (t("fx_audio_only_ledfx") || "Only for LEDFx effects") : (t("fx_audio_bands_hint") || "Select frequency bands or metrics. Empty = use reactive mode")}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_bands_hint") || "Select frequency bands or metrics. Empty = use reactive mode"}</small>
         </label>
-        ` : ''}
       </div>
     </details>
+    ` : ''}
     <details class="fx-section-advanced" ${state.fxFormAccordionState.advanced ? "open" : ""}>
       <summary class="fx-section-header">${t("fx_advanced_title") || "Advanced"}</summary>
       <div style="margin-top: 1rem;">
+        ${assignment.engine !== "wled" ? `
         <details class="fx-subsection" open>
           <summary class="fx-subsection-header">${t("fx_audio_sensitivity_title") || "Audio Sensitivity"}</summary>
           <div class="form-grid" style="margin-top: 0.75rem;">
@@ -2388,6 +2547,7 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
             </label>
           </div>
         </details>
+        ` : ''}
         <details class="fx-subsection">
           <summary class="fx-subsection-header">${t("fx_rendering_title") || "Rendering"}</summary>
           <div class="form-grid" style="margin-top: 0.75rem;">
@@ -2438,6 +2598,7 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
         </details>
       </div>
     </details>
+    ${assignment.engine !== "wled" ? `
     <details class="fx-section-category" ${state.fxFormAccordionState.audioAdvanced ? "open" : ""}>
       <summary class="fx-section-header">${t("fx_audio_advanced_title") || "Audio Processing"}</summary>
       <div class="form-grid" style="margin-top: 1rem;">
@@ -2468,6 +2629,7 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
         </label>
       </div>
     </details>
+    ` : ''}
   `;
 
   // Update effect catalog for the current engine BEFORE setting up event listeners
@@ -2511,10 +2673,8 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
 
   qs("devFxEngine")?.addEventListener("change", async (ev) => {
     assignment.engine = ev.target.value || assignment.engine;
-    // Disable audio reactivity for WLED effects
-    if (assignment.engine === "wled") {
-      assignment.audio_link = false;
-    }
+    // Set audio_link based on engine: LEDFx = true, WLED = false
+    assignment.audio_link = (assignment.engine !== "wled");
     // Update effect catalog for the selected engine
     renderEffectCatalog(assignment.engine);
     // Update effect select dropdown
@@ -2775,21 +2935,6 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
     assignment.audio_mode = ev.target.value || "spectrum";
     saveFn();
   });
-  qs("devFxAudioLink")?.addEventListener("change", (ev) => {
-    // Only allow audio reactivity for LEDFx effects
-    if (assignment.engine === "wled") {
-      ev.target.checked = false;
-      assignment.audio_link = false;
-      notify("Audio reactivity is only available for LEDFx effects", "warn");
-      return;
-    }
-    assignment.audio_link = ev.target.checked;
-    // Re-render form to show/hide audio reactive section (only if not WLED)
-    if (!isWled) {
-      renderEffectDetailForm(qs("fxDetailForm"), segment, assignment, false);
-    }
-    saveFn();
-  });
   // Handle band selection changes
   const bandsContainer = qs("devFxBandsContainer");
   if (bandsContainer) {
@@ -2837,6 +2982,14 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
   });
   qs("devFxDirection")?.addEventListener("change", (ev) => {
     assignment.direction = ev.target.value || "forward";
+    saveFn();
+  });
+  qs("devFxReverse")?.addEventListener("change", (ev) => {
+    assignment.reverse = ev.target.checked;
+    saveFn();
+  });
+  qs("devFxMirror")?.addEventListener("change", (ev) => {
+    assignment.mirror = ev.target.checked;
     saveFn();
   });
   // Scatter slider with value display
@@ -3759,7 +3912,7 @@ function ensureEffectAssignment(segmentId) {
       engine: led.effects.default_engine || "wled",  // Default to WLED for physical segments (for visual consistency)
       effect: defaultEffect,  // Default to simple WLED effect, user can change to audio-reactive
       preset: "",
-      audio_link: false,  // User can enable audio reactivity if needed
+      audio_link: (led.effects.default_engine || "wled") !== "wled",  // LEDFx = true, WLED = false
       audio_profile: "wled_reactive",
       brightness: defaults.brightness,
       intensity: defaults.intensity,

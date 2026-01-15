@@ -16,10 +16,10 @@ esp_err_t temperature_monitor_init() {
     }
 
     // Configure temperature sensor for ESP32-P4
-    // Range: -10°C to 110°C (supports monitoring up to 100°C+ for CPU junction temperature)
+    // Range: -10°C to 80°C (predefined range supported by ESP32-P4 TSENS)
     temperature_sensor_config_t temp_sensor_config = {
         .range_min = -10,
-        .range_max = 110,
+        .range_max = 80,
         .clk_src = TEMPERATURE_SENSOR_CLK_SRC_DEFAULT,
         .flags = {}
     };

@@ -47,10 +47,18 @@ esp_err_t sd_card_init() {
   }
 #endif
 
+  // Initialize SDMMC host first (required before slot init)
+  esp_err_t ret = sdmmc_host_init();
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to initialize SDMMC host: %s", esp_err_to_name(ret));
+    return ret;
+  }
+
   // Initialize slot
-  esp_err_t ret = sdmmc_host_init_slot(SDMMC_HOST_SLOT_1, &slot_config);
+  ret = sdmmc_host_init_slot(SDMMC_HOST_SLOT_1, &slot_config);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Failed to initialize SDMMC slot: %s", esp_err_to_name(ret));
+    sdmmc_host_deinit();
     return ret;
   }
 

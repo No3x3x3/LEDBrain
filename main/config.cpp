@@ -57,11 +57,17 @@ void prune_wled_effect_bindings(AppConfig& cfg) {
   if (cfg.wled_effects.bindings.empty()) {
     return;
   }
-  std::vector<std::string> valid_devices;
-  valid_devices.reserve(cfg.wled_devices.size());
+  // Build list of valid device identifiers (both id and address)
+  std::vector<std::string> valid_ids;
+  std::vector<std::string> valid_addrs;
+  valid_ids.reserve(cfg.wled_devices.size());
+  valid_addrs.reserve(cfg.wled_devices.size());
   for (const auto& dev : cfg.wled_devices) {
     if (!dev.id.empty()) {
-      valid_devices.push_back(dev.id);
+      valid_ids.push_back(dev.id);
+    }
+    if (!dev.address.empty()) {
+      valid_addrs.push_back(dev.address);
     }
   }
   auto& bindings = cfg.wled_effects.bindings;
@@ -69,7 +75,10 @@ void prune_wled_effect_bindings(AppConfig& cfg) {
                    if (bind.device_id.empty()) {
                      return true;
                    }
-                   return std::find(valid_devices.begin(), valid_devices.end(), bind.device_id) == valid_devices.end();
+                   // Match by id OR by address (GUI may send IP address as device_id)
+                   bool found_by_id = std::find(valid_ids.begin(), valid_ids.end(), bind.device_id) != valid_ids.end();
+                   bool found_by_addr = std::find(valid_addrs.begin(), valid_addrs.end(), bind.device_id) != valid_addrs.end();
+                   return !found_by_id && !found_by_addr;
                  }),
                  bindings.end());
 }
@@ -154,6 +163,27 @@ void decode_wled_devices(AppConfig& cfg, cJSON* root) {
     if (cJSON* autod = cJSON_GetObjectItem(entry, "auto_discovered"); cJSON_IsBool(autod)) {
       dev.auto_discovered = cJSON_IsTrue(autod);
     }
+    // Parse layout configuration
+    if (cJSON* layout = cJSON_GetObjectItem(entry, "layout"); cJSON_IsObject(layout)) {
+      if (cJSON* type = cJSON_GetObjectItem(layout, "type"); cJSON_IsNumber(type)) {
+        dev.layout.type = static_cast<LedLayoutType>(std::clamp(static_cast<int>(type->valuedouble), 0, 3));
+      }
+      if (cJSON* w = cJSON_GetObjectItem(layout, "width"); cJSON_IsNumber(w)) {
+        dev.layout.width = static_cast<uint16_t>(std::max(0, static_cast<int>(w->valuedouble)));
+      }
+      if (cJSON* h = cJSON_GetObjectItem(layout, "height"); cJSON_IsNumber(h)) {
+        dev.layout.height = static_cast<uint16_t>(std::max(0, static_cast<int>(h->valuedouble)));
+      }
+      if (cJSON* serp = cJSON_GetObjectItem(layout, "serpentine"); cJSON_IsBool(serp)) {
+        dev.layout.serpentine = cJSON_IsTrue(serp);
+      }
+      if (cJSON* corner = cJSON_GetObjectItem(layout, "start_corner"); cJSON_IsNumber(corner)) {
+        dev.layout.start_corner = static_cast<uint16_t>(std::clamp(static_cast<int>(corner->valuedouble), 0, 3));
+      }
+      if (cJSON* custom = cJSON_GetObjectItem(layout, "custom_map"); cJSON_IsString(custom)) {
+        dev.layout.custom_map = custom->valuestring;
+      }
+    }
     if (dev.id.empty()) {
       if (!dev.address.empty()) {
         dev.id = dev.address;
@@ -188,6 +218,18 @@ void encode_wled_devices(const AppConfig& cfg, cJSON* root) {
     cJSON_AddNumberToObject(obj, "segments", dev.segments);
     cJSON_AddBoolToObject(obj, "active", dev.active);
     cJSON_AddBoolToObject(obj, "auto_discovered", dev.auto_discovered);
+    // Encode layout configuration
+    cJSON* layout = cJSON_AddObjectToObject(obj, "layout");
+    if (layout) {
+      cJSON_AddNumberToObject(layout, "type", static_cast<int>(dev.layout.type));
+      cJSON_AddNumberToObject(layout, "width", dev.layout.width);
+      cJSON_AddNumberToObject(layout, "height", dev.layout.height);
+      cJSON_AddBoolToObject(layout, "serpentine", dev.layout.serpentine);
+      cJSON_AddNumberToObject(layout, "start_corner", dev.layout.start_corner);
+      if (!dev.layout.custom_map.empty()) {
+        cJSON_AddStringToObject(layout, "custom_map", dev.layout.custom_map.c_str());
+      }
+    }
     cJSON_AddItemToArray(arr, obj);
   }
 }
@@ -885,6 +927,9 @@ void decode_wled_effects(AppConfig& cfg, cJSON* root) {
         continue;
       }
       WledEffectBinding bind{};
+      // Default to enabled and DDP on (for new bindings)
+      bind.enabled = true;
+      bind.ddp = true;
       if (cJSON* id = cJSON_GetObjectItem(entry, "device_id"); cJSON_IsString(id)) {
         bind.device_id = id->valuestring;
       }
@@ -896,13 +941,14 @@ void decode_wled_effects(AppConfig& cfg, cJSON* root) {
       if (cJSON* ena = cJSON_GetObjectItem(entry, "enabled"); cJSON_IsBool(ena)) {
         bind.enabled = cJSON_IsTrue(ena);
       }
-      // DDP is enabled by default (true)
-      bind.ddp = true;  // Default to true
       if (cJSON* ddp = cJSON_GetObjectItem(entry, "ddp"); cJSON_IsBool(ddp)) {
         bind.ddp = cJSON_IsTrue(ddp);
       }
       if (cJSON* ch = cJSON_GetObjectItem(entry, "audio_channel"); cJSON_IsString(ch)) {
         bind.audio_channel = ch->valuestring;
+      }
+      if (cJSON* fps = cJSON_GetObjectItem(entry, "fps"); cJSON_IsNumber(fps)) {
+        bind.fps = static_cast<uint16_t>(std::clamp(static_cast<int>(fps->valuedouble), 1, 120));
       }
       if (cJSON* fx = cJSON_GetObjectItem(entry, "effect")) {
         decode_effect_assignment(bind.effect, fx, false);
@@ -942,6 +988,7 @@ void encode_wled_effects(const AppConfig& cfg, cJSON* root) {
     cJSON_AddBoolToObject(b, "enabled", bind.enabled);
     cJSON_AddBoolToObject(b, "ddp", bind.ddp);
     cJSON_AddStringToObject(b, "audio_channel", bind.audio_channel.c_str());
+    cJSON_AddNumberToObject(b, "fps", bind.fps);
     if (cJSON* fx = encode_effect_assignment(bind.effect, false)) {
       cJSON_AddItemToObject(b, "effect", fx);
     }

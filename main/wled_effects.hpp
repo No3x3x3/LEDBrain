@@ -37,11 +37,13 @@ class WledEffectsRuntime {
                        uint16_t fps);
   std::vector<uint8_t> render_frame(const WledEffectBinding& binding,
                                     uint16_t led_count,
-                                    float time_s,
+                                    uint32_t frame_idx,
                                     uint8_t global_brightness,
-                                    uint16_t fps);
+                                    uint16_t fps,
+                                    const LedLayoutConfig& layout = LedLayoutConfig{});
   float apply_envelope(const std::string& key, float input, uint16_t fps, uint16_t attack_ms, uint16_t release_ms);
   std::string envelope_key(const WledEffectBinding& binding) const;
+  uint8_t next_seq();  // Get next DDP sequence (1-15, cycling)
 
   AppConfig* cfg_ref_{nullptr};
   LedEngineRuntime* led_runtime_{nullptr};
@@ -50,7 +52,7 @@ class WledEffectsRuntime {
   std::vector<WledDeviceConfig> devices_{};
   TaskHandle_t task_{nullptr};
   bool running_{false};
-  uint8_t seq_{0};
+  uint8_t seq_{1};  // DDP sequence must be 1-15 (0 is reserved)
   std::unordered_map<std::string, float> envelope_state_;
   std::unordered_set<std::string> active_ddp_devices_;  // Track devices with active DDP mode
   

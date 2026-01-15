@@ -87,23 +87,15 @@ void enable_wled_ddp_mode(const std::string& ip) {
   
   const uint64_t now_us = esp_timer_get_time();
   
-  // Check cache - only enable DDP mode once per device every 5 minutes
+  // Check cache - only enable DDP mode once when starting streaming
+  // Don't spam the API - just enable once and let DDP packets keep it alive
   {
     std::lock_guard<std::mutex> lock(cache_mutex);
     auto it = ddp_mode_enabled_cache.find(ip);
     if (it != ddp_mode_enabled_cache.end()) {
       const uint64_t age_us = now_us - it->second;
-      if (age_us < 300'000'000ULL) {  // 5 minutes
-        // DDP already enabled recently, but ensure we have state cached
-        if (wled_state_cache.find(ip) == wled_state_cache.end()) {
-          // State not cached - this shouldn't happen, but save it now as fallback
-          std::string current_state = get_wled_state(ip);
-          if (!current_state.empty()) {
-            wled_state_cache[ip] = current_state;
-            ESP_LOGI(TAG, "Saved WLED state for %s (late save, DDP already enabled)", ip.c_str());
-          }
-        }
-        return;  // Already enabled recently
+      if (age_us < 300'000'000ULL) {  // 5 minutes - only re-enable if very stale
+        return;  // Already enabled
       }
     }
   }
@@ -140,9 +132,9 @@ void enable_wled_ddp_mode(const std::string& ip) {
     return;
   }
   
-  // JSON payload: enable live mode (DDP receive) and keep WLED on
-  // Note: "on":true ensures WLED displays DDP data, "live":true enables DDP receive mode
-  const char* json_payload = "{\"live\":true,\"on\":true}";
+  // JSON payload: prepare WLED for DDP streaming
+  // Turn on and set to solid black - DDP will override the pixels
+  const char* json_payload = "{\"on\":true,\"bri\":255,\"seg\":[{\"fx\":0,\"col\":[[0,0,0],[0,0,0],[0,0,0]]}]}";
   esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
   esp_http_client_set_header(client, "Content-Type", "application/json");
   
@@ -346,6 +338,17 @@ struct GradientStop {
   Rgb color{};
 };
 
+// Per-device effect state storage (avoids static vectors shared between devices)
+static std::unordered_map<std::string, std::vector<uint8_t>> s_wled_effect_state;
+
+std::vector<uint8_t>& get_wled_state(const std::string& key, size_t size) {
+  auto& state = s_wled_effect_state[key];
+  if (state.size() != size) {
+    state.resize(size, 0);
+  }
+  return state;
+}
+
 float clamp01(float v) {
   return std::max(0.0f, std::min(1.0f, v));
 }
@@ -487,6 +490,13 @@ Rgb sample_gradient(const std::vector<GradientStop>& stops, float t) {
 
 }  // namespace
 
+// Get next DDP sequence number (1-15, cycling)
+uint8_t WledEffectsRuntime::next_seq() {
+  uint8_t s = seq_;
+  seq_ = (seq_ >= 15) ? 1 : seq_ + 1;
+  return s;
+}
+
 esp_err_t WledEffectsRuntime::start(AppConfig* cfg, LedEngineRuntime* led_runtime) {
   cfg_ref_ = cfg;
   led_runtime_ = led_runtime;
@@ -495,7 +505,7 @@ esp_err_t WledEffectsRuntime::start(AppConfig* cfg, LedEngineRuntime* led_runtim
   if (!task_) {
     // Pin to Core 1 for real-time LED rendering (isolated from network/system tasks)
     const BaseType_t res =
-        xTaskCreatePinnedToCore(task_entry, "wled_fx", 4096, this, 5, &task_, 1);
+        xTaskCreatePinnedToCore(task_entry, "wled_fx", 8192, this, 5, &task_, 1);
     if (res != pdPASS) {
       running_ = false;
       task_ = nullptr;
@@ -552,8 +562,9 @@ bool WledEffectsRuntime::resolve_device(const std::string& device_id,
                                         const std::vector<WledDeviceStatus>& status,
                                         WledDeviceConfig& out,
                                         std::string& ip) const {
+  // Try to find device by id first, then by address (GUI may send IP address as device_id)
   auto it = std::find_if(devices.begin(), devices.end(), [&](const WledDeviceConfig& cfg) {
-    return cfg.id == device_id;
+    return cfg.id == device_id || cfg.address == device_id;
   });
   if (it == devices.end()) {
     ESP_LOGW(TAG, "Device %s not found in devices list (%zu devices)", device_id.c_str(), devices.size());
@@ -590,11 +601,31 @@ bool WledEffectsRuntime::resolve_device(const std::string& device_id,
 
 std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& binding,
                                                       uint16_t led_count,
-                                                      float time_s,
+                                                      uint32_t frame_idx,
                                                       uint8_t global_brightness,
-                                                      uint16_t fps) {
+                                                      uint16_t fps,
+                                                      const LedLayoutConfig& layout) {
   const uint16_t pixels = led_count == 0 ? 60 : led_count;
   std::vector<uint8_t> frame(pixels * 3, 0);
+
+  // Matrix layout support
+  const bool is_matrix = (layout.type == LedLayoutType::Matrix && layout.width > 0 && layout.height > 0);
+  const uint16_t matrix_width = is_matrix ? layout.width : pixels;
+  const uint16_t matrix_height = is_matrix ? layout.height : 1;
+  const bool serpentine = layout.serpentine;
+
+  // Helper lambda to get 2D coordinates from linear LED index
+  auto get_coords = [&](uint16_t idx) -> std::pair<uint16_t, uint16_t> {
+    if (!is_matrix) {
+      return {idx, 0};  // col, row for linear strip
+    }
+    uint16_t row = idx / matrix_width;
+    uint16_t col = idx % matrix_width;
+    if (serpentine && (row % 2 == 1)) {
+      col = matrix_width - 1 - col;  // Reverse direction on odd rows
+    }
+    return {col, row};
+  };
 
   // Parse colors with fallback to visible defaults
   Rgb c1 = parse_hex_color(binding.effect.color1, Rgb{1.0f, 1.0f, 1.0f});
@@ -643,9 +674,11 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
       energy = metrics.energy_right > 0.0f ? metrics.energy_right : metrics.energy * 0.8f;
     }
     if (energy <= 0.0001f) {
-      energy = 0.35f + 0.35f * (sinf(time_s * 0.15f) * 0.5f + 0.5f);
+      const float time_approx = static_cast<float>(frame_idx) / 60.0f;  // Approximate time from frame_idx
+      energy = 0.35f + 0.35f * (sinf(time_approx * 0.15f) * 0.5f + 0.5f);
     }
-    const float beat = metrics.beat > 0.0f ? metrics.beat : (sinf(time_s * 0.12f) * 0.5f + 0.5f);
+    const float time_approx = static_cast<float>(frame_idx) / 60.0f;
+    const float beat = metrics.beat > 0.0f ? metrics.beat : (sinf(time_approx * 0.12f) * 0.5f + 0.5f);
     
     float weighted = 0.0f;
     // Check if selected bands are configured
@@ -729,416 +762,427 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     const float intensity = binding.effect.intensity / 255.0f;
     const float direction = lower_copy(binding.effect.direction) == "reverse" ? -1.0f : 1.0f;
     
-    return ledfx_effects::render_effect(binding.effect.effect, binding.effect, led_count, time_s,
+    const float ledfx_time = static_cast<float>(frame_idx) / static_cast<float>(fps > 0 ? fps : 60);
+    return ledfx_effects::render_effect(binding.effect.effect, binding.effect, led_count, ledfx_time,
                                         global_brightness, fps, ledfx_gradient, ledfx_c1, ledfx_c2, ledfx_c3,
                                         brightness, audio_mod, speed, intensity, direction);
   }
 
-  // WLED effects
+  // WLED effects - using frame_idx counter like original WLED firmware
   const std::string effect_name = lower_copy(binding.effect.effect);
-  const float speed = 0.02f + (binding.effect.speed / 255.0f) * 0.25f;
-  const float intensity = binding.effect.intensity / 255.0f;
-  const float direction = lower_copy(binding.effect.direction) == "reverse" ? -1.0f : 1.0f;
-
-  // Debug: log effect name and parameters (removed frame_idx-based logging - frame_idx no longer available in render_frame)
-  // Logging moved to task_loop where frame_idx is still available
+  
+  // WLED speed 0-255: used directly in counter calculations
+  const uint8_t speed_val = binding.effect.speed;
+  // Intensity: 0-255
+  const uint8_t intensity_val = binding.effect.intensity;
+  (void)intensity_val;  // Used in various effects
+  const bool reverse = lower_copy(binding.effect.direction) == "reverse";
 
   uint8_t* dst = frame.data();
-  // Normalize time: convert frame_idx-based animation to time-based
-  // Assuming 60fps baseline, frame_idx increments by 60 per second
-  // So we use time_s * 60.0f to maintain same animation speed
-  const float normalized_time = time_s * 60.0f;
   
-  if (effect_name.find("rainbow") != std::string::npos) {
-    const float base_phase = normalized_time * speed * direction;
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float x = base_phase + (static_cast<float>(i) / static_cast<float>(pixels));
-      const float r = sinf((x) * 6.2831f) * 0.5f + 0.5f;
-      const float g = sinf((x + 0.33f) * 6.2831f) * 0.5f + 0.5f;
-      const float b = sinf((x + 0.66f) * 6.2831f) * 0.5f + 0.5f;
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(r * brightness);
-      *dst++ = to_byte(g * brightness);
-      *dst++ = to_byte(b * brightness);
-    }
-    return frame;
-  }
-
-  if (effect_name.find("solid") != std::string::npos || effect_name.empty()) {
-    // Solid color effect - always visible, even with minimal brightness
-    const float pulse = 0.8f + (sinf(normalized_time * speed * 1.5f) * 0.5f + 0.5f) * 0.2f * intensity;
-    // Ensure minimum visibility even if brightness is very low
-    const float min_brightness = std::max(brightness, 0.1f);
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float phase = normalized_time * speed * 0.25f + pos * 0.5f * direction;
-      const float sample_pos = phase - std::floor(phase);
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, sample_pos);
-      // WLED effects are not audio-reactive - don't use audio_mod
-      // Ensure colors are visible (at least 10% brightness)
-      *dst++ = to_byte(std::max(0.1f, base.r) * min_brightness * pulse);
-      *dst++ = to_byte(std::max(0.1f, base.g) * min_brightness * pulse);
-      *dst++ = to_byte(std::max(0.1f, base.b) * min_brightness * pulse);
-    }
-    return frame;
-  }
-
-  // Energy / Spectrum visualization (LEDFx style)
-  if (effect_name.find("energy") != std::string::npos || effect_name.find("spectrum") != std::string::npos) {
-    AudioMetrics metrics = led_audio_get_metrics();
-    const float energy_scale = binding.effect.audio_link ? audio_mod : 0.5f + 0.5f * sinf(normalized_time * 0.1f);
-    const float center = pixels * 0.5f;
-    const float spread = pixels * 0.4f * intensity;
-    
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float dist_from_center = std::abs(static_cast<float>(i) - center) / spread;
-      // WLED effects are not audio-reactive - use time-based animation
-      const float level = std::max(0.0f, energy_scale * (1.0f - dist_from_center));
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Beat Pulse effect (WLED style - NOT audio-reactive)
-  if (effect_name.find("beat") != std::string::npos && effect_name.find("pulse") != std::string::npos) {
-    // WLED effects are not audio-reactive - use time-based animation
-    const float beat_strength = 0.5f + 0.5f * sinf(normalized_time * 0.2f);
-    const float pulse = 0.3f + beat_strength * 0.7f;
-    const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, 0.5f);
-    for (uint16_t i = 0; i < pixels; ++i) {
-      *dst++ = to_byte(base.r * brightness * pulse);
-      *dst++ = to_byte(base.g * brightness * pulse);
-      *dst++ = to_byte(base.b * brightness * pulse);
-    }
-    return frame;
-  }
-
-  // Beat Bars - spectrum bars reacting to audio
-  if (effect_name.find("beat") != std::string::npos && effect_name.find("bar") != std::string::npos) {
-    AudioMetrics metrics = led_audio_get_metrics();
-    const uint16_t bar_count = std::max<uint16_t>(8, pixels / 8);
-    
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const uint16_t bar_idx = static_cast<uint16_t>(pos * bar_count);
-      
-      // WLED effects are not audio-reactive - use time-based animation
-      const float level = 0.5f + 0.5f * sinf((normalized_time * 0.1f) + (bar_idx * 0.5f));
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Power+ / Energy Flow (WLED style - NOT audio-reactive)
-  if (effect_name.find("power") != std::string::npos || effect_name.find("energy") != std::string::npos) {
-    // WLED effects are not audio-reactive - use time-based animation
-    const float energy_val = 0.5f + 0.5f * sinf(normalized_time * 0.15f);
-    const float move = normalized_time * speed * 0.8f * direction;
-    
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      float t = pos + move;
-      t = t - std::floor(t);
-      
-      // Energy beam effect
-      const float beam_width = 0.15f;
-      const float dist = std::min(t, 1.0f - t) * 2.0f;
-      float level = (dist < beam_width) ? (1.0f - dist / beam_width) * energy_val : 0.0f;
-      level = std::pow(level, 0.5f);  // Gamma correction
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, t);
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Fire 2012 effect (WLED classic)
-  if (effect_name.find("fire") != std::string::npos && effect_name.find("2012") != std::string::npos) {
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float fire_base = pos * 2.0f - 1.0f;
-      const float fire_height = 1.0f - std::abs(fire_base);
-      
-      const float noise1 = sinf((normalized_time * speed * 0.2f) + (pos * 6.0f)) * 0.5f + 0.5f;
-      const float noise2 = sinf((normalized_time * speed * 0.3f) + (pos * 10.0f)) * 0.3f + 0.7f;
-      const float fire_noise = (noise1 * 0.6f + noise2 * 0.4f);
-      
-      float fire_level = fire_height * fire_noise * intensity;
-      fire_level = std::max(0.0f, std::min(1.0f, fire_level));
-      
-      Rgb fire_color;
-      if (fire_level < 0.4f) {
-        fire_color = {fire_level * 2.5f, fire_level * 0.5f, 0.0f};
-      } else {
-        const float t = (fire_level - 0.4f) / 0.6f;
-        fire_color = {1.0f, 0.3f + t * 0.4f, t * 0.2f};
-      }
-      
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(fire_color.r * brightness);
-      *dst++ = to_byte(fire_color.g * brightness);
-      *dst++ = to_byte(fire_color.b * brightness);
-    }
-    return frame;
-  }
-
-  // Meteor effect (WLED)
-  if (effect_name.find("meteor") != std::string::npos && effect_name.find("smooth") == std::string::npos) {
-    const float move = normalized_time * speed * 0.6f * direction;
-    const float meteor_count = 1.0f + intensity * 2.0f;
-    
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      float level = 0.0f;
-      
-      for (float m = 0.0f; m < meteor_count; m += 1.0f) {
-        const float meteor_pos = std::fmod(move + m / meteor_count, 1.0f);
-        const float dist = std::abs(pos - meteor_pos);
-        if (dist < 0.2f) {
-          const float fade = 1.0f - (dist / 0.2f);
-          level = std::max(level, fade * fade);
-        }
-      }
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Meteor Smooth effect (WLED)
-  if (effect_name.find("meteor") != std::string::npos && effect_name.find("smooth") != std::string::npos) {
-    const float move = normalized_time * speed * 0.5f * direction;
-    const float meteor_count = 1.0f + intensity * 2.0f;
-    
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      float level = 0.0f;
-      
-      for (float m = 0.0f; m < meteor_count; m += 1.0f) {
-        const float meteor_pos = std::fmod(move + m / meteor_count, 1.0f);
-        const float dist = std::abs(pos - meteor_pos);
-        if (dist < 0.3f) {
-          const float fade = 1.0f - (dist / 0.3f);
-          level = std::max(level, fade);  // Linear fade for smooth
-        }
-      }
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Ripple effect (WLED - single ripple, not Ripple Flow, NOT audio-reactive)
-  if (effect_name.find("ripple") != std::string::npos && effect_name.find("flow") == std::string::npos) {
-    static std::vector<float> ripples;
-    if (ripples.size() != pixels) {
-      ripples.resize(pixels, 0.0f);
-    }
-    
-    // WLED effects are not audio-reactive - use time-based ripple generation
-    const float simulated_beat = 0.5f + 0.5f * sinf(normalized_time * 0.2f);
-    if (simulated_beat > 0.5f) {
-      const float center = static_cast<float>(esp_random()) / 0xFFFFFFFF;
-      ripples[static_cast<size_t>(center * pixels)] = 1.0f;
-    }
-    
-    const float ripple_speed = speed * 0.05f;
-    for (uint16_t i = 0; i < pixels; ++i) {
-      float level = 0.0f;
-      for (size_t r = 0; r < ripples.size(); ++r) {
-        if (ripples[r] > 0.0f) {
-          const float dist = std::abs(static_cast<float>(i) - static_cast<float>(r)) / static_cast<float>(pixels);
-          const float radius = ripples[r];
-          if (std::abs(dist - radius) < 0.1f) {
-            level = std::max(level, (1.0f - radius) * 0.8f);
-          }
-          ripples[r] += ripple_speed;
-          if (ripples[r] > 1.0f) {
-            ripples[r] = 0.0f;
-          }
-        }
-      }
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, static_cast<float>(i) / pixels);
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Chase / Theater chase (WLED - NOT audio-reactive)
-  if (effect_name.find("chase") != std::string::npos || effect_name.find("theater") != std::string::npos) {
-    const float move = normalized_time * speed * 0.8f * direction;
-    const float spacing = 0.2f + (1.0f - intensity) * 0.3f;
-    
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float phase = std::fmod(pos + move, spacing) / spacing;
-      const float level = (phase < 0.5f) ? (1.0f - phase * 2.0f) * 0.3f + 0.7f : 0.3f;
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Scanner / Larson scanner (WLED - NOT audio-reactive)
-  if (effect_name.find("scanner") != std::string::npos) {
-    const float move = normalized_time * speed * 0.5f * direction;
-    const float center = std::fmod(move, 2.0f) - 1.0f;  // -1 to 1
-    const float width = 0.15f + intensity * 0.1f;
-    
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = (static_cast<float>(i) / static_cast<float>(pixels)) * 2.0f - 1.0f;  // -1 to 1
-      const float dist = std::abs(pos - center);
-      float level = (dist < width) ? 1.0f - (dist / width) : 0.0f;
-      level = std::pow(level, 0.5f);  // Gamma
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, (pos + 1.0f) * 0.5f);
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Rain effect (WLED - basic rain, Rain (Dual) handled separately)
-  if (effect_name.find("rain") != std::string::npos && effect_name.find("dual") == std::string::npos) {
-    static std::vector<float> raindrops(pixels, 0.0f);
-    if (raindrops.size() != pixels) {
-      raindrops.resize(pixels, 0.0f);
-    }
-    
-    const float rain_speed = speed * 0.4f;
-    for (uint16_t i = 0; i < pixels; ++i) {
-      if (raindrops[i] <= 0.0f && (static_cast<float>(esp_random()) / 0xFFFFFFFF) < 0.05f * intensity) {
-        raindrops[i] = 1.0f;
-      }
-      
-      if (raindrops[i] > 0.0f) {
-        raindrops[i] -= rain_speed * 0.02f;
-        if (raindrops[i] < 0.0f) {
-          raindrops[i] = 0.0f;
-        }
-      }
-      
-      const float level = raindrops[i] * intensity;
-      const Rgb base = gradient.empty() ? Rgb{0.2f, 0.4f, 0.8f} : sample_gradient(gradient, static_cast<float>(i) / pixels);
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Rain (Dual) effect (WLED)
-  if (effect_name.find("rain") != std::string::npos && effect_name.find("dual") != std::string::npos) {
-    static std::vector<float> raindrops1(pixels, 0.0f);
-    static std::vector<float> raindrops2(pixels, 0.0f);
-    if (raindrops1.size() != pixels) {
-      raindrops1.resize(pixels, 0.0f);
-      raindrops2.resize(pixels, 0.0f);
-    }
-    
-    const float rain_speed = speed * 0.4f;
-    for (uint16_t i = 0; i < pixels; ++i) {
-      if (raindrops1[i] <= 0.0f && (static_cast<float>(esp_random()) / 0xFFFFFFFF) < 0.03f * intensity) {
-        raindrops1[i] = 1.0f;
-      }
-      if (raindrops2[i] <= 0.0f && (static_cast<float>(esp_random()) / 0xFFFFFFFF) < 0.03f * intensity) {
-        raindrops2[i] = 1.0f;
-      }
-      
-      if (raindrops1[i] > 0.0f) {
-        raindrops1[i] -= rain_speed * 0.02f;
-        if (raindrops1[i] < 0.0f) raindrops1[i] = 0.0f;
-      }
-      if (raindrops2[i] > 0.0f) {
-        raindrops2[i] -= rain_speed * 0.025f;  // Slightly different speed
-        if (raindrops2[i] < 0.0f) raindrops2[i] = 0.0f;
-      }
-      
-      const float level = (raindrops1[i] + raindrops2[i]) * 0.5f * intensity;
-      const Rgb base = gradient.empty() ? Rgb{0.2f, 0.4f, 0.8f} : sample_gradient(gradient, static_cast<float>(i) / pixels);
-      // WLED effects are not audio-reactive - don't use audio_mod
-      *dst++ = to_byte(base.r * brightness * level);
-      *dst++ = to_byte(base.g * brightness * level);
-      *dst++ = to_byte(base.b * brightness * level);
-    }
-    return frame;
-  }
-
-  // Default: gradient flow (fallback for unrecognized effects or empty effect name)
-  // This ensures we always render something visible
-  if (effect_name.empty() || effect_name == "none") {
-    // If no effect specified, render a simple solid color with slight animation
-    const float pulse = 0.8f + 0.2f * sinf(normalized_time * speed * 0.5f);
-    for (uint16_t i = 0; i < pixels; ++i) {
-      *dst++ = to_byte(c1.r * brightness * pulse);
-      *dst++ = to_byte(c1.g * brightness * pulse);
-      *dst++ = to_byte(c1.b * brightness * pulse);
-    }
-    // Note: frame_idx-based logging removed (frame_idx no longer available in render_frame)
-    return frame;
-  }
+  // WLED style counter: frame_idx scaled by speed
+  // Higher speed = faster counter increment
+  const uint32_t counter = frame_idx * (1 + speed_val / 16);
   
-  const float move = normalized_time * speed * 0.5f * direction;
-  for (uint16_t i = 0; i < pixels; ++i) {
-    const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-    float t = pos + move;
-    t = t - std::floor(t);
-    const float mix_c3 = (sinf((t + move) * 6.2831f) * 0.5f + 0.5f) * intensity;
-    const float mix_c2 = 1.0f - mix_c3;
-    Rgb base = gradient.empty() ? Rgb{} : sample_gradient(gradient, t);
-    if (gradient.empty()) {
-      base.r = c1.r * (1.0f - t) + c2.r * t;
-      base.g = c1.g * (1.0f - t) + c2.g * t;
-      base.b = c1.b * (1.0f - t) + c2.b * t;
-      base.r = base.r * mix_c2 + c3.r * mix_c3;
-      base.g = base.g * mix_c2 + c3.g * mix_c3;
-      base.b = base.b * mix_c2 + c3.b * mix_c3;
+  // Helper: color_wheel - WLED style 8-bit hue to RGB
+  auto color_wheel = [](uint8_t pos) -> Rgb {
+    pos = 255 - pos;
+    if (pos < 85) {
+      return Rgb{(255 - pos * 3) / 255.0f, 0.0f, (pos * 3) / 255.0f};
+    } else if (pos < 170) {
+      pos -= 85;
+      return Rgb{0.0f, (pos * 3) / 255.0f, (255 - pos * 3) / 255.0f};
     } else {
-      // Add subtle third color modulation when gradient provided
-      base.r = base.r * mix_c2 + c3.r * 0.25f * mix_c3;
-      base.g = base.g * mix_c2 + c3.g * 0.25f * mix_c3;
-      base.b = base.b * mix_c2 + c3.b * 0.25f * mix_c3;
+      pos -= 170;
+      return Rgb{(pos * 3) / 255.0f, (255 - pos * 3) / 255.0f, 0.0f};
     }
-    const float twinkle = 0.85f + (sinf((move + pos) * 10.0f) * 0.5f + 0.5f) * 0.15f * intensity;
-    // WLED effects are not audio-reactive - don't use audio_mod
-    *dst++ = to_byte(base.r * brightness * twinkle);
-    *dst++ = to_byte(base.g * brightness * twinkle);
-    *dst++ = to_byte(base.b * brightness * twinkle);
-  }
+  };
+
+  // ==================== WLED EFFECTS (frame_idx based) ====================
   
-  // Warn if effect was not recognized (reached default fallback)
-  // Note: frame_idx-based logging removed (frame_idx no longer available in render_frame)
-  // ESP_LOGW(TAG, "Effect '%s' not recognized, using default gradient flow", binding.effect.effect.c_str());
+  // Rainbow - WLED style: counter-based hue rotation
+  if (effect_name.find("rainbow") != std::string::npos) {
+    const uint8_t hue_offset = static_cast<uint8_t>((counter >> 2) & 0xFF);
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint8_t pixel_hue = hue_offset + static_cast<uint8_t>((i * 256) / pixels);
+      const uint8_t final_hue = reverse ? (255 - pixel_hue) : pixel_hue;
+      const Rgb col = color_wheel(final_hue);
+      *dst++ = to_byte(col.r * brightness);
+      *dst++ = to_byte(col.g * brightness);
+      *dst++ = to_byte(col.b * brightness);
+    }
+    return frame;
+  }
+
+  // Solid - static color
+  if (effect_name.find("solid") != std::string::npos) {
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(c1.r * brightness);
+      *dst++ = to_byte(c1.g * brightness);
+      *dst++ = to_byte(c1.b * brightness);
+    }
+    return frame;
+  }
+
+  // Blink - WLED style: on/off based on counter
+  if (effect_name.find("blink") != std::string::npos) {
+    const bool on = ((counter >> 8) & 1) == 0;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      if (on) {
+        *dst++ = to_byte(c1.r * brightness);
+        *dst++ = to_byte(c1.g * brightness);
+        *dst++ = to_byte(c1.b * brightness);
+      } else {
+        *dst++ = to_byte(c2.r * brightness * 0.1f);
+        *dst++ = to_byte(c2.g * brightness * 0.1f);
+        *dst++ = to_byte(c2.b * brightness * 0.1f);
+      }
+    }
+    return frame;
+  }
+
+  // Breathe - WLED style sine wave breathing
+  if (effect_name.find("breathe") != std::string::npos) {
+    // WLED uses sin8 lookup, we approximate with sinf
+    const float phase = static_cast<float>(counter & 0xFFFF) / 65536.0f * 6.2831f;
+    const float breath = (sinf(phase) + 1.0f) * 0.5f;
+    const float level = breath * breath;  // Gamma for natural look
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(c1.r * brightness * level);
+      *dst++ = to_byte(c1.g * brightness * level);
+      *dst++ = to_byte(c1.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Color Wipe - WLED style progressive fill
+  if (effect_name.find("wipe") != std::string::npos) {
+    const uint16_t cycle_frames = pixels * 2;
+    const uint16_t pos_in_cycle = (counter / 2) % cycle_frames;
+    const uint16_t fill_led = pos_in_cycle < pixels ? pos_in_cycle : (cycle_frames - pos_in_cycle - 1);
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint16_t idx = reverse ? (pixels - 1 - i) : i;
+      if (idx <= fill_led) {
+        *dst++ = to_byte(c1.r * brightness);
+        *dst++ = to_byte(c1.g * brightness);
+        *dst++ = to_byte(c1.b * brightness);
+      } else {
+        *dst++ = to_byte(c2.r * brightness * 0.05f);
+        *dst++ = to_byte(c2.g * brightness * 0.05f);
+        *dst++ = to_byte(c2.b * brightness * 0.05f);
+      }
+    }
+    return frame;
+  }
+
+  // Fire 2012 - classic FastLED/WLED fire (always use linear strip mode for reliability)
+  if (effect_name.find("fire") != std::string::npos) {
+    // Original WLED parameters
+    const uint8_t COOLING = 20 + (speed_val / 3);
+    const uint8_t SPARKING = 50 + (intensity_val * 2 / 3);
+
+    // Use single heat array for all pixels (works for both strip and matrix)
+    const std::string state_key = "fire_" + binding.device_id + "_" + std::to_string(pixels);
+    auto& heat = get_wled_state(state_key, pixels);
+
+    // Step 1: Cool down every cell
+    for (uint16_t i = 0; i < pixels; ++i) {
+      uint8_t cooldown = (esp_random() % (((COOLING * 10) / pixels) + 2));
+      heat[i] = (heat[i] > cooldown) ? (heat[i] - cooldown) : 0;
+    }
+
+    // Step 2: Heat drifts up and diffuses
+    for (int k = pixels - 1; k >= 2; --k) {
+      heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2]) / 3;
+    }
+
+    // Step 3: Randomly ignite sparks near bottom
+    if ((esp_random() & 0xFF) < SPARKING) {
+      int y = esp_random() % std::min(7, (int)pixels);
+      uint16_t newHeat = heat[y] + 160 + (esp_random() % 96);
+      heat[y] = (newHeat > 255) ? 255 : static_cast<uint8_t>(newHeat);
+    }
+
+    // Step 4: Convert heat to LED colors
+    uint8_t* dst = frame.data();
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint16_t idx = reverse ? i : (pixels - 1 - i);
+      const uint8_t temperature = heat[idx];
+      
+      uint8_t r, g, b;
+      uint8_t t192 = (temperature > 0) ? ((temperature * 191) / 255 + 1) : 0;
+      uint8_t heatramp = (t192 & 0x3F) << 2;
+      
+      if (t192 > 0x80) { r = 255; g = 255; b = heatramp; }
+      else if (t192 > 0x40) { r = 255; g = heatramp; b = 0; }
+      else { r = heatramp; g = 0; b = 0; }
+      
+      *dst++ = static_cast<uint8_t>(r * brightness);
+      *dst++ = static_cast<uint8_t>(g * brightness);
+      *dst++ = static_cast<uint8_t>(b * brightness);
+    }
+    return frame;
+  }
+
+  // Meteor - WLED style with decay trail
+  if (effect_name.find("meteor") != std::string::npos) {
+    const std::string state_key = "meteor_" + binding.device_id + "_" + std::to_string(pixels);
+    auto& trail = get_wled_state(state_key, pixels);
+    
+    const uint8_t meteor_size = 1 + (intensity_val >> 5);
+    const uint8_t decay = 128 + (intensity_val >> 1);
+    const int meteor_pos = (counter >> 3) % (pixels + meteor_size * 2);
+    
+    // Decay trail randomly
+    for (uint16_t i = 0; i < pixels; ++i) {
+      if ((esp_random() & 0x0F) > 5) {
+        const uint8_t fade = 255 - decay;
+        trail[i] = (trail[i] > fade) ? trail[i] - fade : 0;
+      }
+    }
+    
+    // Draw meteor head
+    for (uint8_t j = 0; j < meteor_size; ++j) {
+      int idx = reverse ? (pixels - 1 - meteor_pos + j) : (meteor_pos - j);
+      if (idx >= 0 && idx < static_cast<int>(pixels)) {
+        trail[idx] = 255;
+      }
+    }
+    
+    // Render
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float level = trail[i] / 255.0f;
+      *dst++ = to_byte(c1.r * brightness * level);
+      *dst++ = to_byte(c1.g * brightness * level);
+      *dst++ = to_byte(c1.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Scanner / Larson - WLED style bounce
+  if (effect_name.find("scanner") != std::string::npos || effect_name.find("larson") != std::string::npos) {
+    const uint16_t cycle_len = pixels * 2;
+    const uint16_t pos_in_cycle = (counter >> 2) % cycle_len;
+    const uint16_t scan_led = pos_in_cycle < pixels ? pos_in_cycle : (cycle_len - pos_in_cycle - 1);
+    const uint8_t width = 1 + (intensity_val >> 5);
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const int dist = std::abs(static_cast<int>(i) - static_cast<int>(scan_led));
+      float level = 0.0f;
+      if (dist < width) {
+        level = 1.0f - static_cast<float>(dist) / width;
+      }
+      *dst++ = to_byte(c1.r * brightness * level);
+      *dst++ = to_byte(c1.g * brightness * level);
+      *dst++ = to_byte(c1.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Theater Chase - WLED classic marquee
+  if (effect_name.find("theater") != std::string::npos || effect_name.find("chase") != std::string::npos) {
+    const int spacing = 3;
+    int offset = (counter >> 4) % spacing;
+    if (reverse) offset = spacing - 1 - offset;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      if (((i + offset) % spacing) == 0) {
+        *dst++ = to_byte(c1.r * brightness);
+        *dst++ = to_byte(c1.g * brightness);
+        *dst++ = to_byte(c1.b * brightness);
+      } else {
+        *dst++ = to_byte(c2.r * brightness * 0.05f);
+        *dst++ = to_byte(c2.g * brightness * 0.05f);
+        *dst++ = to_byte(c2.b * brightness * 0.05f);
+      }
+    }
+    return frame;
+  }
+
+  // Twinkle - WLED random sparkling
+  if (effect_name.find("twinkle") != std::string::npos) {
+    // Per-device twinkle state
+    const std::string state_key = "twinkle_" + binding.device_id + "_" + std::to_string(pixels);
+    auto& twinkle_state = get_wled_state(state_key, pixels);
+    
+    // Randomly spawn new twinkles based on intensity
+    const uint8_t spawn_chance = intensity_val >> 2;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      if (twinkle_state[i] == 0 && (esp_random() & 0xFF) < spawn_chance) {
+        twinkle_state[i] = 255;
+      }
+      if (twinkle_state[i] > 0) {
+        twinkle_state[i] = std::max(0, static_cast<int>(twinkle_state[i]) - 8);
+      }
+    }
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float level = twinkle_state[i] / 255.0f;
+      *dst++ = to_byte(c1.r * brightness * level);
+      *dst++ = to_byte(c1.g * brightness * level);
+      *dst++ = to_byte(c1.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Sparkle - single random flash per frame
+  if (effect_name.find("sparkle") != std::string::npos) {
+    // Background
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(c2.r * brightness * 0.05f);
+      *dst++ = to_byte(c2.g * brightness * 0.05f);
+      *dst++ = to_byte(c2.b * brightness * 0.05f);
+    }
+    // One random sparkle
+    const uint16_t sparkle_idx = esp_random() % pixels;
+    uint8_t* p = frame.data() + sparkle_idx * 3;
+    p[0] = to_byte(c1.r * brightness);
+    p[1] = to_byte(c1.g * brightness);
+    p[2] = to_byte(c1.b * brightness);
+    return frame;
+  }
+
+  // Strobe - WLED fast flash
+  if (effect_name.find("strobe") != std::string::npos) {
+    // Flash duration based on intensity (higher = longer on time)
+    const uint8_t on_frames = 1 + (intensity_val >> 5);
+    const uint8_t cycle_frames = 8 + ((255 - speed_val) >> 3);
+    const bool on = ((counter >> 2) % cycle_frames) < on_frames;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      if (on) {
+        *dst++ = to_byte(c1.r * brightness);
+        *dst++ = to_byte(c1.g * brightness);
+        *dst++ = to_byte(c1.b * brightness);
+      } else {
+        *dst++ = 0; *dst++ = 0; *dst++ = 0;
+      }
+    }
+    return frame;
+  }
+
+  // Gradient - smooth scrolling gradient
+  if (effect_name.find("gradient") != std::string::npos) {
+    const uint8_t offset = static_cast<uint8_t>((counter >> 3) & 0xFF);
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint8_t pos = offset + static_cast<uint8_t>((i * 256) / pixels);
+      const uint8_t final_pos = reverse ? (255 - pos) : pos;
+      const float t = final_pos / 255.0f;
+      const Rgb col = gradient.empty() ?
+        Rgb{c1.r * (1.0f - t) + c2.r * t, c1.g * (1.0f - t) + c2.g * t, c1.b * (1.0f - t) + c2.b * t} :
+        sample_gradient(gradient, t);
+      *dst++ = to_byte(col.r * brightness);
+      *dst++ = to_byte(col.g * brightness);
+      *dst++ = to_byte(col.b * brightness);
+    }
+    return frame;
+  }
+
+  // Running Lights - WLED sine wave
+  if (effect_name.find("running") != std::string::npos || effect_name.find("sine") != std::string::npos) {
+    const uint8_t wave_offset = static_cast<uint8_t>((counter >> 2) & 0xFF);
+    const uint8_t wave_count = 2 + (intensity_val >> 5);
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint8_t pos = wave_offset + static_cast<uint8_t>((i * wave_count * 256) / pixels);
+      const uint8_t final_pos = reverse ? (255 - pos) : pos;
+      // sin8 approximation: use lookup or sine
+      const float phase = final_pos / 255.0f * 6.2831f;
+      const float wave = (sinf(phase) + 1.0f) * 0.5f;
+      *dst++ = to_byte(c1.r * brightness * wave);
+      *dst++ = to_byte(c1.g * brightness * wave);
+      *dst++ = to_byte(c1.b * brightness * wave);
+    }
+    return frame;
+  }
+
+  // Comet - head with trailing tail
+  if (effect_name.find("comet") != std::string::npos) {
+    // Per-device comet trail state
+    const std::string state_key = "comet_" + binding.device_id + "_" + std::to_string(pixels);
+    auto& comet_trail = get_wled_state(state_key, pixels);
+    
+    const uint8_t tail_len = 5 + (intensity_val >> 4);
+    const int head_pos = (counter >> 3) % (pixels + tail_len);
+    
+    // Fade trail
+    for (uint16_t i = 0; i < pixels; ++i) {
+      comet_trail[i] = (comet_trail[i] > 20) ? comet_trail[i] - 20 : 0;
+    }
+    
+    // Draw head
+    const int idx = reverse ? (pixels - 1 - head_pos) : head_pos;
+    if (idx >= 0 && idx < static_cast<int>(pixels)) {
+      comet_trail[idx] = 255;
+    }
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float level = comet_trail[i] / 255.0f;
+      *dst++ = to_byte(c1.r * brightness * level);
+      *dst++ = to_byte(c1.g * brightness * level);
+      *dst++ = to_byte(c1.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Colorloop - all LEDs cycle through hue together
+  if (effect_name.find("colorloop") != std::string::npos) {
+    const uint8_t hue = static_cast<uint8_t>((counter >> 3) & 0xFF);
+    const Rgb col = color_wheel(hue);
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(col.r * brightness);
+      *dst++ = to_byte(col.g * brightness);
+      *dst++ = to_byte(col.b * brightness);
+    }
+    return frame;
+  }
+
+  // Pride - FastLED/WLED pride effect
+  if (effect_name.find("pride") != std::string::npos) {
+    const uint16_t t1 = counter;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      // Multiple overlapping sine waves
+      uint8_t hue = static_cast<uint8_t>((i * 256 / pixels) + (t1 >> 4));
+      hue += static_cast<uint8_t>(sinf(i * 0.1f + (t1 >> 6) * 0.1f) * 20);
+      const Rgb col = color_wheel(hue);
+      *dst++ = to_byte(col.r * brightness);
+      *dst++ = to_byte(col.g * brightness);
+      *dst++ = to_byte(col.b * brightness);
+    }
+    return frame;
+  }
+
+  // Plasma - animated plasma effect
+  if (effect_name.find("plasma") != std::string::npos) {
+    const float t1 = static_cast<float>(counter) * 0.01f;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / pixels * 10.0f;
+      float v = sinf(pos + t1);
+      v += sinf((pos * 0.5f + t1 * 0.5f) * 2.0f);
+      v += sinf((pos * 0.3f + t1 * 0.3f) * 3.0f);
+      v = (v + 3.0f) / 6.0f;
+      const uint8_t hue = static_cast<uint8_t>(v * 255) + static_cast<uint8_t>((counter >> 4) & 0xFF);
+      const Rgb col = color_wheel(hue);
+      *dst++ = to_byte(col.r * brightness);
+      *dst++ = to_byte(col.g * brightness);
+      *dst++ = to_byte(col.b * brightness);
+    }
+    return frame;
+  }
+
+  // Default fallback - gradient scroll
+  const uint8_t offset = static_cast<uint8_t>((counter >> 4) & 0xFF);
+  for (uint16_t i = 0; i < pixels; ++i) {
+    const uint8_t pos = offset + static_cast<uint8_t>((i * 256) / pixels);
+    const float t = pos / 255.0f;
+    const Rgb col = gradient.empty() ?
+      Rgb{c1.r * (1.0f - t) + c2.r * t, c1.g * (1.0f - t) + c2.g * t, c1.b * (1.0f - t) + c2.b * t} :
+      sample_gradient(gradient, t);
+    *dst++ = to_byte(col.r * brightness);
+    *dst++ = to_byte(col.g * brightness);
+    *dst++ = to_byte(col.b * brightness);
+  }
   return frame;
 }
 
@@ -1164,8 +1208,8 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   if (cache_it != frame_cache_.end()) {
     frame = cache_it->second;  // Reuse cached frame
   } else {
-    // Render new frame and cache it (using time_s for animation, frame_idx for cache key)
-    frame = render_frame(binding, leds, time_s, global_brightness, fps);
+    // Render new frame and cache it (using frame_idx for animation like WLED)
+    frame = render_frame(binding, leds, frame_idx, global_brightness, fps, device.layout);
     
     // Verify frame is not empty (all zeros)
     bool frame_empty = true;
@@ -1216,11 +1260,11 @@ bool WledEffectsRuntime::render_and_send(const WledEffectBinding& binding,
   if (use_cache) {
     // Use cached address (much faster - no DNS resolution)
     // Use complete frame function to handle packet splitting automatically
-    ok = ddp_send_complete_frame_cached(&addr_it->second.addr, addr_it->second.addr_len, port, frame, channel, seq_++);
+    ok = ddp_send_complete_frame_cached(&addr_it->second.addr, addr_it->second.addr_len, port, frame, channel, next_seq());
   } else {
     // First time or cache expired - resolve and cache
     // Use complete frame function to handle packet splitting automatically
-    ok = ddp_send_complete_frame(ip, port, frame, channel, seq_++);
+    ok = ddp_send_complete_frame(ip, port, frame, channel, next_seq());
     if (ok) {
       // Cache the resolved address for next time
       struct sockaddr_storage addr;
@@ -1414,43 +1458,8 @@ void WledEffectsRuntime::task_loop() {
                  device_resolved ? 1 : 0, ip.c_str(), binding.effect.effect.c_str());
       }
       
-      // If device is disabled or DDP is disabled, immediately disable DDP mode and remove from active list
+      // If this binding is disabled, just skip it (don't disable DDP - another binding may use same IP)
       if (!binding.enabled || !binding.ddp || !device_resolved || ip.empty()) {
-        if (device_resolved && !ip.empty()) {
-          std::lock_guard<std::mutex> lock(mutex_);
-          if (active_ddp_devices_.find(ip) != active_ddp_devices_.end()) {
-            // Device was active but is now disabled - send black frame first, then disable DDP
-            ESP_LOGI(TAG, "Device %s disabled - sending black frame and disabling DDP mode", ip.c_str());
-            
-            // Send a black frame immediately to stop the effect visually
-            const uint16_t leds = dev.leds == 0 ? 60 : dev.leds;
-            std::vector<uint8_t> black_frame(leds * 3, 0);  // All zeros = black
-            
-            uint16_t port = kDefaultDdpPort;
-            if (cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0) {
-              port = cfg_ref_->mqtt.ddp_port;
-            }
-            // WLED DDP: use channel 0 for default/all segments
-            const uint32_t channel = 0;
-            
-            // Send black frame immediately (don't cache, don't wait)
-            ddp_send_complete_frame(ip, port, black_frame, channel, seq_++);
-            
-            // Then disable DDP mode
-            disable_wled_ddp_mode(ip);
-            active_ddp_devices_.erase(ip);
-          }
-        }
-        if (!binding.enabled) {
-          if (frame_idx % 300 == 0) {  // Log every 5 seconds
-            ESP_LOGI(TAG, "Binding for device %s is disabled (enabled=%d, ddp=%d)", 
-                     binding.device_id.c_str(), binding.enabled ? 1 : 0, binding.ddp ? 1 : 0);
-          }
-        } else if (!binding.ddp) {
-          if (frame_idx % 300 == 0) {  // Log every 5 seconds
-            ESP_LOGI(TAG, "Binding for device %s has DDP disabled", binding.device_id.c_str());
-          }
-        }
         continue;
       }
       
@@ -1460,19 +1469,22 @@ void WledEffectsRuntime::task_loop() {
         continue;
       }
       
-      // Track this device as having active DDP mode
+      // Track this device as having active DDP mode (for cleanup when disabled)
+      // NOTE: We don't call enable_wled_ddp_mode() - just send DDP packets like LedFX does
+      // WLED automatically enters live mode when receiving DDP data
       {
         std::lock_guard<std::mutex> lock(mutex_);
         active_ddp_devices_.insert(ip);
       }
-      // Enable DDP receive mode in WLED if not already enabled (only once per device, not every frame)
-      // This ensures WLED is in DDP receive mode and not running local effects
-      if (frame_idx == 0 || frame_idx % 1800 == 0) {  // Check every 30 seconds at 60fps
-        enable_wled_ddp_mode(ip);
-      }
+      
       // Calculate time in seconds since start for time-based animation
       const float time_s = static_cast<float>(esp_timer_get_time() - start_time_us) / 1'000'000.0f;
-      const bool ok = render_and_send(binding, dev, ip, time_s, frame_idx, global_brightness, fps);
+      if (frame_idx % 300 == 0) {  // Debug: log time_s every 5 seconds
+        ESP_LOGI(TAG, "Animation time_s=%.2f, frame_idx=%lu for device %s", time_s, static_cast<unsigned long>(frame_idx), ip.c_str());
+      }
+      // Use per-device FPS if set, otherwise fall back to global FPS
+      const uint16_t device_fps = binding.fps > 0 ? std::clamp<uint16_t>(binding.fps, 1, 120) : fps;
+      const bool ok = render_and_send(binding, dev, ip, time_s, frame_idx, global_brightness, device_fps);
       if (ok && frame_idx % 300 == 0) {  // Log success every 5 seconds
         ESP_LOGI(TAG, "Successfully rendering effect '%s' to device %s (%s:%u, enabled=%d, ddp=%d)", 
                  binding.effect.effect.c_str(), binding.device_id.c_str(), ip.c_str(), 
@@ -1569,9 +1581,7 @@ void WledEffectsRuntime::task_loop() {
         if (cache_it != frame_cache_.end()) {
           frame = cache_it->second;
         } else {
-          // Calculate time in seconds since start for time-based animation
-          const float time_s = static_cast<float>(esp_timer_get_time() - start_time_us) / 1'000'000.0f;
-          frame = render_frame(local_binding, common_led_count, time_s, global_brightness, fps);
+          frame = render_frame(local_binding, common_led_count, frame_idx, global_brightness, fps);
           if (frame_cache_.size() < 10) {
             frame_cache_[cache_key] = frame;
           }
@@ -1634,9 +1644,7 @@ void WledEffectsRuntime::task_loop() {
         fake.device_id = vseg.id;
         fake.effect = vseg.effect;
         fake.audio_channel = "mix";
-        // Calculate time in seconds since start for time-based animation
-        const float time_s = static_cast<float>(esp_timer_get_time() - start_time_us) / 1'000'000.0f;
-        const auto frame = render_frame(fake, static_cast<uint16_t>(total_leds), time_s, global_brightness, fps);
+        const auto frame = render_frame(fake, static_cast<uint16_t>(total_leds), frame_idx, global_brightness, fps);
         size_t cursor = 0;
         for (const auto& m : vseg.members) {
           uint16_t length = m.length;
@@ -1674,7 +1682,7 @@ void WledEffectsRuntime::task_loop() {
           const uint16_t port = cfg_ref_ && cfg_ref_->mqtt.ddp_port > 0 ? cfg_ref_->mqtt.ddp_port : kDefaultDdpPort;
           const uint32_t channel = 0;  // WLED DDP: use channel 0 for compatibility
             const std::vector<uint8_t> slice(frame.begin() + cursor, frame.begin() + cursor + length * 3);
-            const bool ok = ddp_send_complete_frame(ip, port, slice, channel, seq_++);
+            const bool ok = ddp_send_complete_frame(ip, port, slice, channel, next_seq());
             if (!ok) {
               ESP_LOGW(TAG, "DDP send failed (virtual %s) -> %s:%u", vseg.id.c_str(), ip.c_str(), port);
             }

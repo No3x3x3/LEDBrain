@@ -27,6 +27,24 @@ struct MqttConfig {
   uint16_t ddp_port{4048};
 };
 
+// LED layout types for preview mapping
+enum class LedLayoutType : uint8_t {
+  Line = 0,      // Single horizontal line (default)
+  Matrix = 1,    // 2D matrix (rows x cols)
+  Circle = 2,    // Circular arrangement
+  Custom = 3,    // Custom x,y coordinates per LED
+};
+
+struct LedLayoutConfig {
+  LedLayoutType type{LedLayoutType::Line};
+  uint16_t width{0};   // For matrix: columns, for circle: unused
+  uint16_t height{0};  // For matrix: rows, for circle: unused
+  bool serpentine{false};  // For matrix: alternating row direction
+  bool start_corner{0};    // 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right
+  // Custom coordinates stored as JSON string (parsed in frontend)
+  std::string custom_map{};
+};
+
 struct WledDeviceConfig {
   std::string id{};
   std::string name{};
@@ -35,6 +53,7 @@ struct WledDeviceConfig {
   uint16_t segments{1};
   bool active{true};
   bool auto_discovered{false};
+  LedLayoutConfig layout{};  // LED arrangement for preview
 };
 
 struct WledEffectBinding {
@@ -43,6 +62,7 @@ struct WledEffectBinding {
   bool enabled{true};
   bool ddp{true};
   std::string audio_channel{"mix"};  // mix | left | right
+  uint16_t fps{60};  // Per-device FPS (1-120, default 60)
   EffectAssignment effect{};
 };
 

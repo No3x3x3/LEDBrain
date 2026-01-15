@@ -8,17 +8,14 @@
 // Check schematic file: docs/hardware/schematics/3_8311&TFCARD.png
 
 namespace {
-  // SDMMC pin configuration for JC-ESP32P4-M3-DEV
-  // Based on typical ESP32-P4 SDMMC pin assignments and board layout
-  // For microSD card slot (check schematic 3_8311&TFCARD.png for verification)
-  // ESP32-P4 SDMMC typically uses GPIO matrix, so pins can be flexible
-  // Common ESP32-P4 SDMMC pin assignments:
-  constexpr int SDMMC_CLK_PIN = 14;  // SDMMC clock pin (CLK)
-  constexpr int SDMMC_CMD_PIN = 15;  // SDMMC command pin (CMD)
-  constexpr int SDMMC_D0_PIN = 2;    // SDMMC data line 0 (D0/DAT0)
-  constexpr int SDMMC_D1_PIN = 4;    // SDMMC data line 1 (D1/DAT1) - optional for 1-bit mode
-  constexpr int SDMMC_D2_PIN = 12;   // SDMMC data line 2 (D2/DAT2) - optional for 1-bit mode
-  constexpr int SDMMC_D3_PIN = 13;   // SDMMC data line 3 (D3/DAT3) - optional for 1-bit mode
+  // SDMMC pin configuration for JC-ESP32P4-M3-DEV / ESP32-P4
+  // ESP32-P4 SDIO 3.0 dedicated pins (SD1 slot):
+  constexpr int SDMMC_CLK_PIN = 43;  // SD1_CCLK_PAD - SDMMC clock
+  constexpr int SDMMC_CMD_PIN = 44;  // SD1_CCMD_PAD - SDMMC command
+  constexpr int SDMMC_D0_PIN = 39;   // SD1_CDATA0_PAD - Data line 0
+  constexpr int SDMMC_D1_PIN = 40;   // SD1_CDATA1_PAD - Data line 1
+  constexpr int SDMMC_D2_PIN = 41;   // SD1_CDATA2_PAD - Data line 2
+  constexpr int SDMMC_D3_PIN = 42;   // SD1_CDATA3_PAD - Data line 3
   constexpr int SDMMC_CD_PIN = -1;   // Card detect pin (optional, -1 if not used)
   
   // Note: For 1-bit mode, only CLK, CMD, and D0 are required

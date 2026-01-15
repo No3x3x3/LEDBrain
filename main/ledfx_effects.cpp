@@ -181,228 +181,477 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
   std::vector<uint8_t> frame(pixels * 3, 0);
   uint8_t* dst = frame.data();
   
-  // Normalize time: convert time-based animation (assuming 60fps baseline)
-  const float normalized_time = time_s * 60.0f;
-  
+  const float t = time_s;  // Time in seconds (real-time)
   const std::string name_lower = lower_copy(effect_name);
   AudioMetrics metrics = led_audio_get_metrics();
+  
+  // Audio reactivity: use audio_mod for LEDFx effects when audio_link is enabled
+  const float audio = effect.audio_link ? audio_mod : 1.0f;
+  const float bass = effect.audio_link ? std::max(0.3f, metrics.bass) : 0.5f;
+  const float mid = effect.audio_link ? std::max(0.3f, metrics.mid) : 0.5f;
+  const float treble = effect.audio_link ? std::max(0.3f, metrics.treble) : 0.5f;
+  const float energy = effect.audio_link ? std::max(0.3f, metrics.energy) : 0.5f;
+  const float beat = effect.audio_link ? metrics.beat : 0.0f;
 
-  // Fire / Flame effect (LEDFx style)
-  if (name_lower.find("fire") != std::string::npos && name_lower.find("2012") == std::string::npos) {
-    const float fire_intensity = effect.audio_link ? (metrics.bass * 0.6f + metrics.mid * 0.4f) : intensity;
+  // Helper: HSV to RGB
+  auto hsv_to_rgb = [](float h, float s, float v) -> Rgb {
+    h = h - std::floor(h);
+    const float c = v * s;
+    const float x = c * (1.0f - std::abs(std::fmod(h * 6.0f, 2.0f) - 1.0f));
+    const float m = v - c;
+    float r = 0, g = 0, b = 0;
+    const int hi = static_cast<int>(h * 6.0f) % 6;
+    switch (hi) {
+      case 0: r = c; g = x; b = 0; break;
+      case 1: r = x; g = c; b = 0; break;
+      case 2: r = 0; g = c; b = x; break;
+      case 3: r = 0; g = x; b = c; break;
+      case 4: r = x; g = 0; b = c; break;
+      case 5: r = c; g = 0; b = x; break;
+    }
+    return Rgb{r + m, g + m, b + m};
+  };
+
+  // ==================== LEDFx AUDIO-REACTIVE EFFECTS ====================
+
+  // Energy - audio-reactive mirrored bars from center (classic LedFX effect)
+  if (name_lower.find("energy") != std::string::npos) {
+    // LedFX Energy: mirrored visualization from center
+    const uint16_t half = pixels / 2;
+    const float spread = energy * intensity;  // 0-1 range
+    const uint16_t lit_leds = static_cast<uint16_t>(spread * half);
     
     for (uint16_t i = 0; i < pixels; ++i) {
+      const uint16_t dist_from_center = (i < half) ? (half - 1 - i) : (i - half);
+      float level = 0.0f;
+      
+      if (dist_from_center < lit_leds) {
+        // Gradient from center (bright) to edge (dim)
+        level = 1.0f - (static_cast<float>(dist_from_center) / std::max(1.0f, static_cast<float>(lit_leds)));
+      }
+      
+      // Color based on position in gradient (center = start, edge = end)
+      const float grad_pos = static_cast<float>(dist_from_center) / static_cast<float>(half);
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, grad_pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Spectrum / Bars - frequency bands visualization (LedFX style)
+  if (name_lower.find("spectrum") != std::string::npos || name_lower.find("bar") != std::string::npos) {
+    // LedFX Bars: each LED represents a frequency band
+    for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float fire_base = pos * 2.0f - 1.0f;  // -1 to 1
-      const float fire_height = 1.0f - std::abs(fire_base);
       
-      // Fire noise using multiple sine waves
-      const float noise1 = sinf((normalized_time * speed * 0.3f) + (pos * 8.0f)) * 0.5f + 0.5f;
-      const float noise2 = sinf((normalized_time * speed * 0.5f) + (pos * 12.0f)) * 0.3f + 0.7f;
-      const float noise3 = sinf((normalized_time * speed * 0.7f) + (pos * 6.0f)) * 0.2f + 0.8f;
-      const float fire_noise = (noise1 * 0.4f + noise2 * 0.4f + noise3 * 0.2f);
-      
-      // Fire color gradient: red at bottom, orange/yellow in middle, white at top
-      float fire_level = fire_height * fire_noise * fire_intensity;
-      fire_level = std::max(0.0f, std::min(1.0f, fire_level));
-      
-      Rgb fire_color;
-      if (fire_level < 0.3f) {
-        fire_color = {fire_level * 3.33f, 0.0f, 0.0f};
-      } else if (fire_level < 0.7f) {
-        const float t = (fire_level - 0.3f) / 0.4f;
-        fire_color = {1.0f, t * 0.5f, 0.0f};
+      // Interpolate between bass, mid, treble
+      float band_level;
+      if (pos < 0.33f) {
+        const float local = pos * 3.0f;
+        band_level = bass * (1.0f - local) + mid * local;
+      } else if (pos < 0.66f) {
+        const float local = (pos - 0.33f) * 3.0f;
+        band_level = mid * (1.0f - local) + treble * local;
       } else {
-        const float t = (fire_level - 0.7f) / 0.3f;
-        fire_color = {1.0f, 0.5f + t * 0.5f, t * 0.3f};
+        band_level = treble;
       }
       
-      *dst++ = to_byte(fire_color.r * brightness * audio_mod);
-      *dst++ = to_byte(fire_color.g * brightness * audio_mod);
-      *dst++ = to_byte(fire_color.b * brightness * audio_mod);
+      const float level = band_level * intensity;
+      const Rgb col = gradient.empty() ? hsv_to_rgb(pos, 1.0f, 1.0f) : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
     }
     return frame;
   }
 
-  // Matrix effect (falling code) - LEDFx style
-  if (name_lower.find("matrix") != std::string::npos) {
-    std::string state_key = "matrix_" + effect_name + "_" + std::to_string(led_count);
-    auto& matrix_drops = get_state(state_key, pixels);
+  // Scroll - audio-reactive scrolling gradient (LedFX style)
+  if (name_lower.find("scroll") != std::string::npos) {
+    std::string state_key = "scroll_" + effect_name + "_" + std::to_string(led_count);
+    auto& scroll_buf = get_state(state_key, pixels * 3);
     
-    const float drop_speed = speed * 0.8f;
+    // Shift pixels in direction
+    if (direction > 0) {
+      for (int i = pixels - 1; i > 0; --i) {
+        scroll_buf[i * 3 + 0] = scroll_buf[(i - 1) * 3 + 0];
+        scroll_buf[i * 3 + 1] = scroll_buf[(i - 1) * 3 + 1];
+        scroll_buf[i * 3 + 2] = scroll_buf[(i - 1) * 3 + 2];
+      }
+    } else {
+      for (int i = 0; i < static_cast<int>(pixels) - 1; ++i) {
+        scroll_buf[i * 3 + 0] = scroll_buf[(i + 1) * 3 + 0];
+        scroll_buf[i * 3 + 1] = scroll_buf[(i + 1) * 3 + 1];
+        scroll_buf[i * 3 + 2] = scroll_buf[(i + 1) * 3 + 2];
+      }
+    }
+    
+    // Insert new pixel based on audio energy
+    // LedFX scroll: color based on gradient position cycling with audio
+    const float hue_offset = std::fmod(t * speed * 0.1f, 1.0f);
+    const float color_pos = std::fmod(hue_offset + energy * 0.5f, 1.0f);
+    const Rgb new_col = gradient.empty() ? hsv_to_rgb(color_pos, 1.0f, 1.0f) : sample_gradient(gradient, color_pos);
+    const float new_brightness = 0.2f + energy * 0.8f * intensity;
+    
+    const int insert_idx = direction > 0 ? 0 : (pixels - 1);
+    scroll_buf[insert_idx * 3 + 0] = new_col.r * new_brightness;
+    scroll_buf[insert_idx * 3 + 1] = new_col.g * new_brightness;
+    scroll_buf[insert_idx * 3 + 2] = new_col.b * new_brightness;
+    
+    // Render
     for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      
-      // Randomly spawn new drops
-      if (matrix_drops[i] <= 0.0f && (static_cast<float>(esp_random()) / 0xFFFFFFFF) < 0.02f * intensity) {
-        matrix_drops[i] = 1.0f;
-      }
-      
-      // Update drop position
-      if (matrix_drops[i] > 0.0f) {
-        matrix_drops[i] -= drop_speed * 0.02f;
-        if (matrix_drops[i] < 0.0f) {
-          matrix_drops[i] = 0.0f;
-        }
-      }
-      
-      // Render: bright head, fading trail
+      *dst++ = to_byte(scroll_buf[i * 3 + 0] * brightness);
+      *dst++ = to_byte(scroll_buf[i * 3 + 1] * brightness);
+      *dst++ = to_byte(scroll_buf[i * 3 + 2] * brightness);
+    }
+    return frame;
+  }
+
+  // Power - bass-reactive expanding bars from center (LedFX style)
+  if (name_lower.find("power") != std::string::npos) {
+    // LedFX Power: similar to Energy but more responsive to bass
+    const uint16_t half = pixels / 2;
+    const float power_level = 0.1f + bass * 0.9f * intensity;
+    const uint16_t lit_leds = static_cast<uint16_t>(power_level * half);
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint16_t dist_from_center = (i < half) ? (half - 1 - i) : (i - half);
       float level = 0.0f;
-      if (matrix_drops[i] > 0.0f) {
-        const float head_pos = matrix_drops[i];
-        const float dist = std::abs(pos - head_pos);
-        if (dist < 0.15f) {
-          level = 1.0f - (dist / 0.15f) * 0.7f;
-        } else if (dist < 0.4f && head_pos < pos) {
-          level = (0.4f - dist) / 0.25f * 0.3f;
-        }
+      
+      if (dist_from_center < lit_leds) {
+        level = 1.0f - (static_cast<float>(dist_from_center) / std::max(1.0f, static_cast<float>(lit_leds))) * 0.3f;
       }
       
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
-      *dst++ = to_byte(base.r * brightness * level * audio_mod);
-      *dst++ = to_byte(base.g * brightness * level * audio_mod);
-      *dst++ = to_byte(base.b * brightness * level * audio_mod);
+      const float grad_pos = static_cast<float>(dist_from_center) / static_cast<float>(half);
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, grad_pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
     }
     return frame;
   }
 
-  // Waves effect (smooth rolling waves) - LEDFx style
-  if (name_lower.find("wave") != std::string::npos && name_lower.find("energy") == std::string::npos) {
-    const float move = normalized_time * speed * 0.3f * direction;
+  // Magnitude - fills strip based on overall audio level (LedFX style)
+  if (name_lower.find("magnitude") != std::string::npos) {
+    const float mag_level = energy * intensity;
+    const uint16_t lit_leds = static_cast<uint16_t>(mag_level * pixels);
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint16_t idx = direction > 0 ? i : (pixels - 1 - i);
+      float level = 0.0f;
+      
+      if (idx < lit_leds) {
+        level = 1.0f;
+      } else if (idx < lit_leds + 3 && lit_leds > 0) {
+        // Soft edge
+        level = 1.0f - (static_cast<float>(idx - lit_leds) / 3.0f);
+      }
+      
+      const float grad_pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const Rgb col = gradient.empty() ? hsv_to_rgb(grad_pos * 0.3f, 1.0f, 1.0f) : sample_gradient(gradient, grad_pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Single Color - solid color with optional audio modulation
+  if (name_lower.find("single") != std::string::npos || name_lower.find("solid") != std::string::npos) {
+    const float level = effect.audio_link ? (0.3f + energy * 0.7f * intensity) : intensity;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(c1.r * brightness * level);
+      *dst++ = to_byte(c1.g * brightness * level);
+      *dst++ = to_byte(c1.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Wavelength - maps frequency to position (LedFX style)
+  if (name_lower.find("wavelength") != std::string::npos) {
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float wave1 = sinf((pos * 3.0f + move) * 6.2831f) * 0.5f + 0.5f;
-      const float wave2 = sinf((pos * 5.0f + move * 1.3f) * 6.2831f) * 0.3f + 0.7f;
-      const float wave = (wave1 * 0.6f + wave2 * 0.4f) * intensity;
       
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
-      *dst++ = to_byte(base.r * brightness * wave * audio_mod);
-      *dst++ = to_byte(base.g * brightness * wave * audio_mod);
-      *dst++ = to_byte(base.b * brightness * wave * audio_mod);
+      // Map position to frequency: left=bass, center=mid, right=treble
+      float freq_val;
+      if (pos < 0.33f) {
+        freq_val = bass;
+      } else if (pos < 0.66f) {
+        freq_val = mid;
+      } else {
+        freq_val = treble;
+      }
+      
+      // Add wave modulation
+      const float wave = sinf((pos * 4.0f + t * speed * 0.5f) * 6.2831f) * 0.3f + 0.7f;
+      const float level = freq_val * wave * intensity;
+      
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
     }
     return frame;
   }
 
-  // Plasma effect (animated gradients) - LEDFx style
+  // Blade - sharp moving scanner with audio width modulation (LedFX style)
+  if (name_lower.find("blade") != std::string::npos) {
+    // Blade width based on bass
+    const float blade_width = 0.05f + bass * 0.2f * intensity;
+    // Position bounces back and forth
+    const float cycle = std::fmod(t * speed * 0.5f, 2.0f);
+    const float blade_pos = cycle < 1.0f ? cycle : 2.0f - cycle;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const float dist = std::abs(pos - blade_pos);
+      float level = 0.0f;
+      
+      if (dist < blade_width) {
+        level = 1.0f - (dist / blade_width);
+        level = level * level;  // Sharp falloff
+      }
+      
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Strobe - beat-synchronized strobe (LedFX style)
+  if (name_lower.find("strobe") != std::string::npos) {
+    // LedFX strobe: flash on beat detection
+    static float strobe_decay = 0.0f;
+    
+    if (beat > 0.7f) {
+      strobe_decay = 1.0f;
+    }
+    
+    const float level = strobe_decay * intensity;
+    strobe_decay *= 0.7f;  // Fast decay
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(c1.r * brightness * level);
+      *dst++ = to_byte(c1.g * brightness * level);
+      *dst++ = to_byte(c1.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Pulse - beat-synchronized expanding pulse (LedFX style)
+  if (name_lower.find("pulse") != std::string::npos) {
+    static float pulse_radius = 0.0f;
+    static float pulse_brightness = 0.0f;
+    
+    // Trigger on beat
+    if (beat > 0.7f && pulse_radius < 0.1f) {
+      pulse_radius = 0.01f;
+      pulse_brightness = 1.0f;
+    }
+    
+    // Expand and fade
+    pulse_radius += 0.03f * speed;
+    pulse_brightness *= 0.95f;
+    
+    if (pulse_radius > 1.0f) {
+      pulse_radius = 0.0f;
+    }
+    
+    const float center = 0.5f;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const float dist = std::abs(pos - center);
+      float level = 0.0f;
+      
+      // Ring effect
+      if (std::abs(dist - pulse_radius * 0.5f) < 0.05f) {
+        level = pulse_brightness * intensity;
+      }
+      
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Melt - flowing gradient with audio distortion (LedFX style)
+  if (name_lower.find("melt") != std::string::npos) {
+    const float base_flow = t * speed * 0.3f;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      
+      // Flowing gradient with audio-reactive distortion
+      float phase = pos + base_flow;
+      // Add sine distortion based on audio
+      phase += sinf(pos * 6.0f + t * speed * 2.0f) * mid * 0.2f;
+      phase += sinf(pos * 12.0f - t * speed) * treble * 0.1f;
+      phase = std::fmod(phase, 1.0f);
+      if (phase < 0) phase += 1.0f;
+      
+      const Rgb col = gradient.empty() ? hsv_to_rgb(phase, 1.0f, 1.0f) : sample_gradient(gradient, phase);
+      const float level = 0.4f + energy * 0.6f * intensity;
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Fade - smooth color transitions (LedFX style)
+  if (name_lower.find("fade") != std::string::npos) {
+    const float phase = std::fmod(t * speed * 0.2f, 1.0f);
+    const Rgb col = gradient.empty() ? hsv_to_rgb(phase, 1.0f, 1.0f) : sample_gradient(gradient, phase);
+    const float level = effect.audio_link ? (0.3f + energy * 0.7f * intensity) : intensity;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Blocks - audio-reactive color blocks (LedFX style)
+  if (name_lower.find("block") != std::string::npos) {
+    const uint8_t block_size = std::max<uint8_t>(1, pixels / 8);
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint8_t block_idx = i / block_size;
+      // Alternate blocks respond to different frequencies
+      float block_level;
+      switch (block_idx % 3) {
+        case 0: block_level = bass; break;
+        case 1: block_level = mid; break;
+        default: block_level = treble; break;
+      }
+      block_level *= intensity;
+      
+      const float grad_pos = static_cast<float>(block_idx * block_size) / static_cast<float>(pixels);
+      const Rgb col = gradient.empty() ? hsv_to_rgb(grad_pos, 1.0f, 1.0f) : sample_gradient(gradient, grad_pos);
+      *dst++ = to_byte(col.r * brightness * block_level);
+      *dst++ = to_byte(col.g * brightness * block_level);
+      *dst++ = to_byte(col.b * brightness * block_level);
+    }
+    return frame;
+  }
+
+  // Beat - flash on beat detection (LedFX style)
+  if (name_lower.find("beat") != std::string::npos && name_lower.find("heart") == std::string::npos) {
+    static float beat_level = 0.0f;
+    
+    if (beat > 0.7f) {
+      beat_level = 1.0f;
+    }
+    
+    const float level = beat_level * intensity;
+    beat_level *= 0.85f;  // Decay
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+
+  // Fire - audio-reactive fire
+  if (name_lower.find("fire") != std::string::npos) {
+    std::string state_key = "fire_ledfx_" + std::to_string(led_count);
+    auto& heat = get_state(state_key, pixels);
+    
+    const float cooling_base = 20.0f + (1.0f - intensity) * 30.0f;
+    const float sparking = 50.0f + bass * 150.0f * intensity;
+    
+    // Cool down
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float cool = (static_cast<float>(esp_random() % 100) / 100.0f) * cooling_base / pixels;
+      heat[i] = std::max(0.0f, heat[i] - cool);
+    }
+    
+    // Heat rises
+    for (int k = pixels - 1; k >= 2; --k) {
+      heat[k] = (heat[k - 1] + heat[k - 2] * 2.0f) / 3.0f;
+    }
+    
+    // Sparks
+    if ((static_cast<float>(esp_random()) / 0xFFFFFFFF) < sparking / 255.0f) {
+      const int y = esp_random() % std::min(7, static_cast<int>(pixels));
+      heat[y] = std::min(1.0f, heat[y] + 0.6f + (static_cast<float>(esp_random()) / 0xFFFFFFFF) * 0.4f);
+    }
+    
+    // Render
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint16_t idx = direction > 0 ? i : (pixels - 1 - i);
+      const float h = heat[idx];
+      // Heat to color
+      Rgb col;
+      if (h < 0.33f) {
+        col = {h * 3.0f, 0.0f, 0.0f};
+      } else if (h < 0.66f) {
+        col = {1.0f, (h - 0.33f) * 3.0f * 0.5f, 0.0f};
+      } else {
+        col = {1.0f, 0.5f + (h - 0.66f) * 1.5f, (h - 0.66f) * 0.9f};
+      }
+      *dst++ = to_byte(col.r * brightness);
+      *dst++ = to_byte(col.g * brightness);
+      *dst++ = to_byte(col.b * brightness);
+    }
+    return frame;
+  }
+
+  // Rainbow - gradient flow (non-audio)
+  if (name_lower.find("rainbow") != std::string::npos || name_lower.find("gradient") != std::string::npos) {
+    const float offset = t * speed * 0.15f * direction;
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const float hue = std::fmod(pos + offset, 1.0f);
+      const Rgb col = gradient.empty() ? hsv_to_rgb(hue, 1.0f, 1.0f) : sample_gradient(gradient, hue);
+      *dst++ = to_byte(col.r * brightness * intensity);
+      *dst++ = to_byte(col.g * brightness * intensity);
+      *dst++ = to_byte(col.b * brightness * intensity);
+    }
+    return frame;
+  }
+
+  // Plasma - animated plasma
   if (name_lower.find("plasma") != std::string::npos) {
-    const float move = normalized_time * speed * 0.2f;
+    const float time_factor = t * speed * 0.5f;
     for (uint16_t i = 0; i < pixels; ++i) {
       const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float x = pos * 8.0f;
-      const float plasma = sinf(x + move) * 0.5f + 
-                          sinf(x * 2.0f + move * 1.3f) * 0.3f +
-                          sinf(x * 0.5f + move * 0.7f) * 0.2f;
-      const float t = (plasma + 1.0f) * 0.5f;
+      float v = sinf(pos * 10.0f + time_factor);
+      v += sinf((pos * 10.0f + time_factor * 0.5f) * 0.5f);
+      v += sinf((pos * 10.0f * 0.3f + time_factor * 0.3f) * 1.5f);
+      v = (v + 3.0f) / 6.0f;
       
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, t);
-      *dst++ = to_byte(base.r * brightness * intensity * audio_mod);
-      *dst++ = to_byte(base.g * brightness * intensity * audio_mod);
-      *dst++ = to_byte(base.b * brightness * intensity * audio_mod);
+      const Rgb col = gradient.empty() ? hsv_to_rgb(v + time_factor * 0.05f, 0.8f, 1.0f) : sample_gradient(gradient, v);
+      *dst++ = to_byte(col.r * brightness * intensity);
+      *dst++ = to_byte(col.g * brightness * intensity);
+      *dst++ = to_byte(col.b * brightness * intensity);
     }
     return frame;
   }
 
-  // Ripple Flow effect - LEDFx style (different from WLED Ripple)
-  if (name_lower.find("ripple") != std::string::npos && name_lower.find("flow") != std::string::npos) {
-    std::string state_key = "ripple_flow_" + effect_name + "_" + std::to_string(led_count);
-    auto& ripples = get_state(state_key, pixels);
-    
-    AudioMetrics metrics = led_audio_get_metrics();
-    if (effect.audio_link && metrics.beat > 0.5f) {
-      const float center = static_cast<float>(esp_random()) / 0xFFFFFFFF;
-      ripples[static_cast<size_t>(center * pixels)] = 1.0f;
-    }
-    
-    const float ripple_speed = speed * 0.05f;
-    for (uint16_t i = 0; i < pixels; ++i) {
-      float level = 0.0f;
-      for (size_t r = 0; r < ripples.size(); ++r) {
-        if (ripples[r] > 0.0f) {
-          const float dist = std::abs(static_cast<float>(i) - static_cast<float>(r)) / static_cast<float>(pixels);
-          const float radius = ripples[r];
-          if (std::abs(dist - radius) < 0.1f) {
-            level = std::max(level, (1.0f - radius) * 0.8f);
-          }
-          ripples[r] += ripple_speed;
-          if (ripples[r] > 1.0f) {
-            ripples[r] = 0.0f;
-          }
-        }
-      }
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, static_cast<float>(i) / pixels);
-      *dst++ = to_byte(base.r * brightness * level * audio_mod);
-      *dst++ = to_byte(base.g * brightness * level * audio_mod);
-      *dst++ = to_byte(base.b * brightness * level * audio_mod);
-    }
-    return frame;
+  // Default: gradient flow
+  const float offset = t * speed * 0.2f * direction;
+  for (uint16_t i = 0; i < pixels; ++i) {
+    const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+    float phase = std::fmod(pos + offset, 1.0f);
+    const Rgb col = gradient.empty() ?
+      Rgb{c1.r * (1.0f - phase) + c2.r * phase,
+          c1.g * (1.0f - phase) + c2.g * phase,
+          c1.b * (1.0f - phase) + c2.b * phase} :
+      sample_gradient(gradient, phase);
+    *dst++ = to_byte(col.r * brightness * intensity);
+    *dst++ = to_byte(col.g * brightness * intensity);
+    *dst++ = to_byte(col.b * brightness * intensity);
   }
-
-  // Rain effect - LEDFx style
-  if (name_lower.find("rain") != std::string::npos) {
-    std::string state_key = "rain_" + effect_name + "_" + std::to_string(led_count);
-    auto& raindrops = get_state(state_key, pixels);
-    
-    const float rain_speed = speed * 0.4f;
-    for (uint16_t i = 0; i < pixels; ++i) {
-      // Spawn new drops
-      if (raindrops[i] <= 0.0f && (static_cast<float>(esp_random()) / 0xFFFFFFFF) < 0.05f * intensity) {
-        raindrops[i] = 1.0f;
-      }
-      
-      // Update drop
-      if (raindrops[i] > 0.0f) {
-        raindrops[i] -= rain_speed * 0.02f;
-        if (raindrops[i] < 0.0f) {
-          raindrops[i] = 0.0f;
-        }
-      }
-      
-      const float level = raindrops[i] * intensity;
-      const Rgb base = gradient.empty() ? Rgb{0.2f, 0.4f, 0.8f} : sample_gradient(gradient, static_cast<float>(i) / pixels);
-      *dst++ = to_byte(base.r * brightness * level * audio_mod);
-      *dst++ = to_byte(base.g * brightness * level * audio_mod);
-      *dst++ = to_byte(base.b * brightness * level * audio_mod);
-    }
-    return frame;
-  }
-
-  // Aura effect - LEDFx style
-  if (name_lower.find("aura") != std::string::npos) {
-    const float move = normalized_time * speed * 0.15f;
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      const float aura = sinf((pos * 2.0f + move) * 6.2831f) * 0.3f + 0.7f;
-      const float pulse = 0.6f + sinf(normalized_time * 0.1f) * 0.4f;
-      
-      const Rgb base = gradient.empty() ? c1 : sample_gradient(gradient, pos);
-      *dst++ = to_byte(base.r * brightness * aura * pulse * audio_mod);
-      *dst++ = to_byte(base.g * brightness * aura * pulse * audio_mod);
-      *dst++ = to_byte(base.b * brightness * aura * pulse * audio_mod);
-    }
-    return frame;
-  }
-
-  // Hyperspace effect - LEDFx style
-  if (name_lower.find("hyperspace") != std::string::npos) {
-    const float move = normalized_time * speed * 1.2f * direction;
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
-      float t = std::fmod(pos + move, 1.0f);
-      
-      // Star streaks
-      const float streak = std::pow(1.0f - t, 2.0f) * intensity;
-      const float warp = sinf((pos * 4.0f + move * 2.0f) * 6.2831f) * 0.2f + 0.8f;
-      
-      const Rgb base = gradient.empty() ? Rgb{0.0f, 0.5f, 1.0f} : sample_gradient(gradient, pos);
-      *dst++ = to_byte(base.r * brightness * streak * warp * audio_mod);
-      *dst++ = to_byte(base.g * brightness * streak * warp * audio_mod);
-      *dst++ = to_byte(base.b * brightness * streak * warp * audio_mod);
-    }
-    return frame;
-  }
-
-  // Default: return black frame if effect not found
   return frame;
 }
 

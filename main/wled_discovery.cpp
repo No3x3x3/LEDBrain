@@ -33,6 +33,8 @@ struct HttpInfo {
   std::string version;
   uint16_t leds{0};
   uint16_t segments{1};
+  uint16_t matrix_width{0};
+  uint16_t matrix_height{0};
   bool looks_like_wled{false};
 };
 
@@ -166,6 +168,15 @@ bool fetch_info_http(const std::string& ip, uint16_t port, HttpInfo& info) {
         info.segments = static_cast<uint16_t>(seg_val);
       }
     }
+    // Parse matrix dimensions from WLED (leds.matrix.w and leds.matrix.h)
+    if (cJSON* matrix = cJSON_GetObjectItem(leds, "matrix"); cJSON_IsObject(matrix)) {
+      if (cJSON* w = cJSON_GetObjectItem(matrix, "w"); cJSON_IsNumber(w)) {
+        info.matrix_width = static_cast<uint16_t>(std::max(0, static_cast<int>(w->valuedouble)));
+      }
+      if (cJSON* h = cJSON_GetObjectItem(matrix, "h"); cJSON_IsNumber(h)) {
+        info.matrix_height = static_cast<uint16_t>(std::max(0, static_cast<int>(h->valuedouble)));
+      }
+    }
   }
   if (cJSON* brand = cJSON_GetObjectItem(root, "brand"); cJSON_IsString(brand)) {
     if (string_contains_ci(brand->valuestring, "wled")) {
@@ -232,6 +243,12 @@ WledDeviceStatus make_status_from_result(const mdns_result_t& result) {
     if (!info.version.empty()) status.version = info.version;
     if (info.leds > 0) status.config.leds = info.leds;
     if (info.segments > 0) status.config.segments = info.segments;
+    // Copy matrix dimensions from WLED
+    if (info.matrix_width > 0 && info.matrix_height > 0) {
+      status.config.layout.type = LedLayoutType::Matrix;
+      status.config.layout.width = info.matrix_width;
+      status.config.layout.height = info.matrix_height;
+    }
     status.http_verified = info.looks_like_wled;
   }
   // Ensure ID is stable across different service entries for the same host/IP

@@ -1,6 +1,7 @@
 dependencies:
   espressif/esp_serial_slave_link:
-    component_hash: ac1776806de0a6e371c84e87898bb983e19ce62aa7f1e2e5c4a3b0234a575d2c
+    component_hash: 
+      ac1776806de0a6e371c84e87898bb983e19ce62aa7f1e2e5c4a3b0234a575d2c
     dependencies:
     - name: idf
       require: private
