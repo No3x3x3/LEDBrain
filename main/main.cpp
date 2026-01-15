@@ -64,20 +64,27 @@ extern "C" void app_main(void) {
   const esp_err_t eth_status = ethernet_start(s_cfg.network);
   bool eth_connected = false;
   if (eth_status == ESP_OK) {
-    // Wait a bit for Ethernet to connect
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    eth_connected = ethernet_is_connected();
+    // Wait for Ethernet DHCP - up to 10 seconds
+    for (int i = 0; i < 20 && !eth_connected; i++) {
+      vTaskDelay(pdMS_TO_TICKS(500));
+      eth_connected = ethernet_is_connected();
+    }
     if (eth_connected) {
       ESP_LOGI(TAG, "Ethernet connected: %s", ethernet_get_ip().c_str());
       if (!mdns_start(s_cfg.network.hostname.c_str())) {
         ESP_LOGW(TAG, "mDNS init failed");
       }
     } else {
-      ESP_LOGW(TAG, "Ethernet not connected");
+      ESP_LOGW(TAG, "Ethernet not connected yet (will retry in background)");
     }
   } else {
     ESP_LOGE(TAG, "Ethernet init failed: %s", esp_err_to_name(eth_status));
   }
+
+  // Start web server FIRST - before WiFi C6 init which can block
+  // This ensures the web UI is available via Ethernet even if WiFi C6 has issues
+  ESP_LOGI(TAG, "Starting web server...");
+  start_web_server(s_cfg, &s_led_engine, &s_wled_fx);
 
   // WiFi via ESP32-C6 coprocessor (PPP over UART)
   // Initialize WiFi connection through ESP32-C6 if Ethernet is not available
@@ -119,7 +126,7 @@ extern "C" void app_main(void) {
     snapclient_light_start(s_cfg.led_engine.audio.snapcast);
   }
   s_wled_fx.start(&s_cfg, &s_led_engine);
-  start_web_server(s_cfg, &s_led_engine, &s_wled_fx);
+  // Web server already started above (before WiFi C6 init)
   wled_discovery_trigger_scan();
 
   if (s_cfg.mqtt.configured && !s_cfg.mqtt.host.empty()) {
@@ -152,7 +159,7 @@ static void network_monitor_task(void* arg) {
     
     if (eth_connected && !eth_was_connected) {
       // Ethernet just connected - disable WiFi C6
-      ESP_LOGI(TAG, "Ethernet connected, disabling WiFi C6");
+      ESP_LOGI(TAG, "Ethernet connected: %s, disabling WiFi C6", ethernet_get_ip().c_str());
       if (wifi_was_active) {
         wifi_c6_deinit();
         wifi_c6_ctrl_deinit();
@@ -160,9 +167,11 @@ static void network_monitor_task(void* arg) {
       }
       eth_was_connected = true;
       
-      // Restart mDNS with Ethernet
+      // (Re)start mDNS with Ethernet
       if (!mdns_start(s_cfg.network.hostname.c_str())) {
         ESP_LOGW(TAG, "mDNS restart failed");
+      } else {
+        ESP_LOGI(TAG, "mDNS started: %s.local", s_cfg.network.hostname.c_str());
       }
     } else if (!eth_connected && eth_was_connected) {
       // Ethernet just disconnected - enable WiFi C6

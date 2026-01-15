@@ -63,15 +63,21 @@ namespace {
   vprintf_like_t original_vprintf = nullptr;
   
   int log_vprintf_hook(const char* format, va_list args) {
-    // Call original vprintf first
+    // Make a copy of args before using - va_list can only be consumed once!
+    va_list args_copy;
+    va_copy(args_copy, args);
+    
+    // Call original vprintf first (consumes args)
+    int result = 0;
     if (original_vprintf) {
-      original_vprintf(format, args);
+      result = original_vprintf(format, args);
     }
     
     // Extract log level and tag from format (ESP-IDF log format: "TAG: message")
     // This is a simplified parser - ESP-IDF logs have format: "[level] TAG: message"
     char buffer[MAX_LOG_LINE_LENGTH];
-    int len = vsnprintf(buffer, sizeof(buffer), format, args);
+    int len = vsnprintf(buffer, sizeof(buffer), format, args_copy);
+    va_end(args_copy);
     if (len < 0 || len >= static_cast<int>(sizeof(buffer))) {
       len = sizeof(buffer) - 1;
       buffer[len] = '\0';
@@ -133,7 +139,7 @@ namespace {
       }
     }
     
-    return len;
+    return result;  // Return result from original vprintf
   }
   
   void init_log_buffer() {

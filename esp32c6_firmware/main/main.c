@@ -24,6 +24,7 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_http_server.h"
+#include "esp_http_client.h"
 #include <stdlib.h>
 #include <cJSON.h>
 
@@ -281,11 +282,116 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static esp_err_t ledbrain_redirect_handler(httpd_req_t *req) {
-    httpd_resp_set_status(req, "302 Found");
-    httpd_resp_set_hdr(req, "Location", "http://192.168.11.2/");
-    httpd_resp_send(req, "Redirecting to LEDBrain UI...", HTTPD_RESP_USE_STRLEN);
+static const char* http_status_text(int status) {
+    switch (status) {
+        case 200: return "200 OK";
+        case 302: return "302 Found";
+        case 400: return "400 Bad Request";
+        case 404: return "404 Not Found";
+        case 500: return "500 Internal Server Error";
+        default: return "502 Bad Gateway";
+    }
+}
+
+static esp_err_t proxy_to_p4(httpd_req_t *req, const char *path_override) {
+    const char *path = path_override ? path_override : req->uri;
+    char url[192];
+    snprintf(url, sizeof(url), "http://192.168.11.2%s", path);
+
+    esp_http_client_method_t method = HTTP_METHOD_GET;
+    if (req->method == HTTP_POST) {
+        method = HTTP_METHOD_POST;
+    }
+
+    esp_http_client_config_t cfg = {};
+    cfg.url = url;
+    cfg.method = method;
+    cfg.timeout_ms = 4000;
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        httpd_resp_set_status(req, http_status_text(500));
+        httpd_resp_send(req, "Proxy init failed", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    int content_len = req->content_len;
+    std::string body;
+    if (content_len > 0 && content_len < 64 * 1024) {
+        body.resize(content_len);
+        int received = 0;
+        while (received < content_len) {
+            int r = httpd_req_recv(req, &body[received], content_len - received);
+            if (r <= 0) {
+                esp_http_client_cleanup(client);
+                httpd_resp_set_status(req, http_status_text(400));
+                httpd_resp_send(req, "Failed to read request body", HTTPD_RESP_USE_STRLEN);
+                return ESP_FAIL;
+            }
+            received += r;
+        }
+    }
+
+    esp_err_t err = esp_http_client_open(client, content_len);
+    if (err != ESP_OK) {
+        esp_http_client_cleanup(client);
+        httpd_resp_set_status(req, http_status_text(502));
+        httpd_resp_send(req, "Proxy connect failed", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    if (content_len > 0) {
+        esp_http_client_write(client, body.data(), content_len);
+    }
+
+    int fetch_len = esp_http_client_fetch_headers(client);
+    int status = esp_http_client_get_status_code(client);
+    httpd_resp_set_status(req, http_status_text(status));
+
+    char content_type[64] = {};
+    if (esp_http_client_get_resp_header(client, "Content-Type", content_type, sizeof(content_type)) == ESP_OK) {
+        httpd_resp_set_type(req, content_type);
+    }
+
+    char buffer[512];
+    int read_len = 0;
+    int remaining = fetch_len;
+    while (true) {
+        read_len = esp_http_client_read(client, buffer, sizeof(buffer));
+        if (read_len <= 0) {
+            break;
+        }
+        httpd_resp_send_chunk(req, buffer, read_len);
+        if (remaining > 0) {
+            remaining -= read_len;
+        }
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
     return ESP_OK;
+}
+
+static esp_err_t ledbrain_redirect_handler(httpd_req_t *req) {
+    const char *uri = req->uri;
+    const char *suffix = "";
+    if (strncmp(uri, "/ledbrain", 9) == 0) {
+        suffix = uri + 9;
+        if (suffix[0] == '\0') {
+            suffix = "/";
+        }
+    }
+    return proxy_to_p4(req, suffix);
+}
+
+static esp_err_t ledbrain_assets_handler(httpd_req_t *req) {
+    if (strncmp(req->uri, "/api/wifi/", 10) == 0) {
+        httpd_resp_set_status(req, http_status_text(404));
+        httpd_resp_send(req, "Not found", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    return proxy_to_p4(req, nullptr);
 }
 
 static esp_err_t api_wifi_scan_handler(httpd_req_t *req) {
@@ -407,7 +513,8 @@ static esp_err_t api_wifi_connect_handler(httpd_req_t *req) {
 static httpd_handle_t start_web_server(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.max_uri_handlers = 4;
+    config.max_uri_handlers = 8;
+    config.uri_match_fn = httpd_uri_match_wildcard;
     
     httpd_handle_t server = NULL;
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -424,6 +531,13 @@ static httpd_handle_t start_web_server(void) {
             .handler = ledbrain_redirect_handler,
         };
         httpd_register_uri_handler(server, &ledbrain);
+
+        httpd_uri_t ledbrain_wildcard = {
+            .uri = "/ledbrain/*",
+            .method = HTTP_GET,
+            .handler = ledbrain_redirect_handler,
+        };
+        httpd_register_uri_handler(server, &ledbrain_wildcard);
         
         httpd_uri_t scan = {
             .uri = "/api/wifi/scan",
@@ -438,6 +552,40 @@ static httpd_handle_t start_web_server(void) {
             .handler = api_wifi_connect_handler,
         };
         httpd_register_uri_handler(server, &connect);
+
+        httpd_uri_t api_proxy = {
+            .uri = "/api/*",
+            .method = HTTP_GET,
+            .handler = ledbrain_assets_handler,
+        };
+        httpd_register_uri_handler(server, &api_proxy);
+        httpd_uri_t api_proxy_post = {
+            .uri = "/api/*",
+            .method = HTTP_POST,
+            .handler = ledbrain_assets_handler,
+        };
+        httpd_register_uri_handler(server, &api_proxy_post);
+
+        httpd_uri_t lang_proxy = {
+            .uri = "/lang/*",
+            .method = HTTP_GET,
+            .handler = ledbrain_assets_handler,
+        };
+        httpd_register_uri_handler(server, &lang_proxy);
+
+        httpd_uri_t app_js_proxy = {
+            .uri = "/app.js",
+            .method = HTTP_GET,
+            .handler = ledbrain_assets_handler,
+        };
+        httpd_register_uri_handler(server, &app_js_proxy);
+
+        httpd_uri_t css_proxy = {
+            .uri = "/style.css",
+            .method = HTTP_GET,
+            .handler = ledbrain_assets_handler,
+        };
+        httpd_register_uri_handler(server, &css_proxy);
         
         ESP_LOGI(TAG, "Web server started on http://192.168.4.1");
     }
