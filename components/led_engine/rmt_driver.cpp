@@ -4,7 +4,6 @@
 #include "esp_log.h"
 #include "driver/rmt_tx.h"
 #include "driver/rmt_encoder.h"
-#include "driver/rmt_sync.h"
 #include "driver/gpio.h"
 #include <algorithm>
 #include <cstring>

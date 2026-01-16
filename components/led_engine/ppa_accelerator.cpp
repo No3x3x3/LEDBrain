@@ -195,4 +195,29 @@ bool is_available() {
 
 }  // namespace ppa_accel
 
+#else  // CONFIG_IDF_TARGET_ESP32P4
+
+// Stub implementations for non-ESP32P4 platforms
+#include "led_engine/ppa_accelerator.hpp"
+
+namespace ppa_accel {
+
+// These are already defined as inline in the header, but we provide
+// non-inline versions here to satisfy the linker in case they're not inlined
+esp_err_t init_blend_client() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t init_fill_client() { return ESP_ERR_NOT_SUPPORTED; }
+void deinit() {}
+esp_err_t blend_rgb(const uint8_t*, const uint8_t*, uint8_t*,
+                    uint16_t, uint16_t, float) { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t blend_rgb_per_pixel_alpha(const uint8_t*, const uint8_t*, uint8_t*,
+                                    const uint8_t*, uint16_t, uint16_t) { 
+  return ESP_ERR_NOT_SUPPORTED; 
+}
+esp_err_t fill_rgb(uint8_t*, uint16_t, uint16_t, uint8_t, uint8_t, uint8_t) { 
+  return ESP_ERR_NOT_SUPPORTED; 
+}
+bool is_available() { return false; }
+
+}  // namespace ppa_accel
+
 #endif  // CONFIG_IDF_TARGET_ESP32P4

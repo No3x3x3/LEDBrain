@@ -136,10 +136,17 @@ float led_audio_get_band_value(const std::string& band_name) {
   // 32-channel GEQ bands (geq_0 to geq_31)
   if (band_name.size() >= 5 && band_name.substr(0, 4) == "geq_") {
     int band_idx = -1;
-    try {
-      band_idx = std::stoi(band_name.substr(4));
-    } catch (...) {
-      return 0.0f;
+    // Manual parsing (no exceptions in ESP-IDF)
+    const std::string num_str = band_name.substr(4);
+    if (!num_str.empty()) {
+      band_idx = 0;
+      for (char c : num_str) {
+        if (c >= '0' && c <= '9') {
+          band_idx = band_idx * 10 + (c - '0');
+        } else {
+          return 0.0f;  // Invalid character
+        }
+      }
     }
     if (band_idx >= 0 && band_idx < 32) {
       return g_metrics.geq_bands[band_idx];

@@ -752,11 +752,11 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
       const float* geq_data = metrics.geq_bands;  // metrics is already retrieved at function start
       
       for (uint16_t i = 0; i < pixels; ++i) {
-        const int col = i % columns;
+        const int col_idx = i % columns;
         const int row = i / columns;
         
         // Map column to GEQ band
-        const int band_idx = (col * geq_bands) / columns;
+        const int band_idx = (col_idx * geq_bands) / columns;
         const float band_value = band_idx < geq_bands ? geq_data[band_idx] : 0.0f;
         
         // Calculate height in 3D space (normalized 0-1)

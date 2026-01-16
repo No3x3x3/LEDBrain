@@ -57,7 +57,7 @@ namespace ppa_accel {
 inline esp_err_t init_blend_client() { return ESP_ERR_NOT_SUPPORTED; }
 inline esp_err_t init_fill_client() { return ESP_ERR_NOT_SUPPORTED; }
 inline void deinit() {}
-inline esp_err_t blend_rgb(const uint8_t*, const uint8_t*, uint8_t*,
+inline esp_err_t blend_rgb(const uint8_t* src, const uint8_t* dst, uint8_t* out,
                           uint16_t, uint16_t, float) { return ESP_ERR_NOT_SUPPORTED; }
 inline esp_err_t blend_rgb_per_pixel_alpha(const uint8_t*, const uint8_t*, uint8_t*,
                                           const uint8_t*, uint16_t, uint16_t) { 
