@@ -46,6 +46,20 @@ This project uses effects and algorithms inspired by or derived from the followi
 - **Copyright**: Espressif Systems (Shanghai) PTE LTD
 - **Usage**: ESP32-P4 framework and drivers
 
+### WLED-MM (MoonModules)
+- **Project**: [WLED-MM](https://github.com/MoonModules/WLED-MM)
+- **License**: EUPL-1.2
+- **Copyright**: MoonModules Contributors
+- **Usage**: Concepts and algorithms inspired by WLED-MM:
+  - 32-channel GEQ (Graphic Equalizer) concept
+  - Audio Dynamic Limiter algorithm concept
+  - Paintbrush Effect visual concept
+  - 3D GEQ Effect visualization concept
+- **Note**: All code has been **reimplemented from scratch** for LEDBrain 
+  architecture and is licensed under MIT. No code was directly copied 
+  from WLED-MM. This is algorithmic inspiration, not code copying.
+- **License Text**: Available at https://github.com/MoonModules/WLED-MM/blob/mdev/LICENSE
+
 ### Additional Components
 - **mDNS**: MIT License (see `components/mdns/LICENSE`)
 - **ESP Protocols**: Various licenses (see respective component directories)
@@ -55,7 +69,7 @@ This project uses effects and algorithms inspired by or derived from the followi
 ## Note on Effect Implementations
 
 The LED effect implementations in this project are:
-- **Inspired by** WLED and LEDFx projects
+- **Inspired by** WLED, WLED-MM, and LEDFx projects
 - **Reimplemented** for ESP32-P4 platform using ESP-IDF
 - **Adapted** for real-time audio reactivity and DDP protocol support
 - **Not direct copies** of the original code, but algorithmic implementations

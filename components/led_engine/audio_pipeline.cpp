@@ -45,6 +45,10 @@ void led_audio_set_metrics(const AudioMetrics& metrics) {
   g_metrics.mid = clamp01f(g_metrics.mid);
   g_metrics.treble = clamp01f(g_metrics.treble);
   g_metrics.beat = clamp01f(g_metrics.beat);
+  // Clamp 32-channel GEQ bands
+  for (int i = 0; i < 32; ++i) {
+    g_metrics.geq_bands[i] = clamp01f(g_metrics.geq_bands[i]);
+  }
   // magnitude_spectrum and sample_rate are stored as-is (no clamping needed)
 }
 
@@ -128,6 +132,19 @@ float led_audio_get_band_value(const std::string& band_name) {
   if (band_name == "energy") return g_metrics.energy;
   if (band_name == "beat") return g_metrics.beat;
   if (band_name == "tempo_bpm") return g_metrics.tempo_bpm;
+  
+  // 32-channel GEQ bands (geq_0 to geq_31)
+  if (band_name.size() >= 5 && band_name.substr(0, 4) == "geq_") {
+    int band_idx = -1;
+    try {
+      band_idx = std::stoi(band_name.substr(4));
+    } catch (...) {
+      return 0.0f;
+    }
+    if (band_idx >= 0 && band_idx < 32) {
+      return g_metrics.geq_bands[band_idx];
+    }
+  }
   
   return 0.0f;
 }

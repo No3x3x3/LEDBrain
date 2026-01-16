@@ -1,10 +1,13 @@
 #include "wled_effects.hpp"
 #include "ledfx_effects.hpp"
+#include "effect_engine_selector.hpp"  // Automatic engine selection
 #include "ddp_tx.hpp"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_engine/audio_pipeline.hpp"
+#include "led_engine/ppa_accelerator.hpp"  // PPA hardware acceleration
+#include "led_engine/framebuffer.hpp"  // Framebuffer for multi-pass effects
 #include "wled_discovery.hpp"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -23,6 +26,37 @@ namespace {
 
 constexpr uint16_t kDefaultDdpPort = 4048;
 static const char* TAG = "wled_fx";
+
+// PPA optimization thresholds
+// PPA overhead is significant for small segments, so we only use it for larger ones
+constexpr uint16_t PPA_FILL_THRESHOLD = 300;  // Use PPA fill for 300+ LEDs
+constexpr uint16_t PPA_BLEND_THRESHOLD = 200;  // Use PPA blend for 200+ LEDs
+constexpr uint16_t PPA_MATRIX_THRESHOLD = 32;  // Use PPA for matrices 32x32 or larger (1024+ pixels)
+
+// Helper: Check if PPA should be used for fill operation
+inline bool should_use_ppa_fill(uint16_t pixel_count, bool is_matrix, uint16_t width, uint16_t height) {
+  if (!ppa_accel::is_available()) {
+    return false;
+  }
+  // For matrices, use PPA if total pixels >= threshold
+  if (is_matrix && width > 0 && height > 0) {
+    return (width * height) >= PPA_MATRIX_THRESHOLD * PPA_MATRIX_THRESHOLD;
+  }
+  // For strips, use PPA if pixel count >= threshold
+  return pixel_count >= PPA_FILL_THRESHOLD;
+}
+
+// Helper: Check if PPA should be used for blend operation
+inline bool should_use_ppa_blend(uint16_t pixel_count, bool is_matrix, uint16_t width, uint16_t height) {
+  if (!ppa_accel::is_available()) {
+    return false;
+  }
+  // Blend has lower threshold due to higher CPU cost
+  if (is_matrix && width > 0 && height > 0) {
+    return (width * height) >= PPA_BLEND_THRESHOLD;
+  }
+  return pixel_count >= PPA_BLEND_THRESHOLD;
+}
 
 // Cache to track which devices have DDP mode enabled (to avoid spamming API)
 static std::unordered_map<std::string, uint64_t> ddp_mode_enabled_cache;
@@ -498,14 +532,23 @@ uint8_t WledEffectsRuntime::next_seq() {
 }
 
 esp_err_t WledEffectsRuntime::start(AppConfig* cfg, LedEngineRuntime* led_runtime) {
+  // Initialize PPA (Pixel Processing Accelerator) for hardware-accelerated pixel operations
+  // This is optional - if PPA is not available, effects will fall back to software rendering
+  if (ppa_accel::is_available() || ppa_accel::init_fill_client() == ESP_OK) {
+    ESP_LOGI(TAG, "PPA (Pixel Processing Accelerator) initialized for hardware acceleration");
+  } else {
+    ESP_LOGD(TAG, "PPA not available, using software rendering");
+  }
   cfg_ref_ = cfg;
   led_runtime_ = led_runtime;
   update_config(*cfg);
   running_ = true;
   if (!task_) {
     // Pin to Core 1 for real-time LED rendering (isolated from network/system tasks)
+    // High priority (8) to ensure LED rendering is not blocked by network/filesystem tasks
+    // Higher than heartbeat (5), discovery (4), network_monitor (3)
     const BaseType_t res =
-        xTaskCreatePinnedToCore(task_entry, "wled_fx", 8192, this, 5, &task_, 1);
+        xTaskCreatePinnedToCore(task_entry, "wled_fx", 8192, this, 8, &task_, 1);
     if (res != pdPASS) {
       running_ = false;
       task_ = nullptr;
@@ -527,6 +570,12 @@ void WledEffectsRuntime::stop() {
       disable_wled_ddp_mode(ip);
     }
     active_ddp_devices_.clear();
+  }
+  
+  // Deinitialize PPA (optional cleanup)
+  if (ppa_accel::is_available()) {
+    ppa_accel::deinit();
+    ESP_LOGI(TAG, "PPA deinitialized");
   }
   
   if (task_) {
@@ -607,6 +656,9 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
                                                       const LedLayoutConfig& layout) {
   const uint16_t pixels = led_count == 0 ? 60 : led_count;
   std::vector<uint8_t> frame(pixels * 3, 0);
+  
+  // Track render start time for audio sync compensation (PPA operations may add latency)
+  const uint64_t render_start_us = esp_timer_get_time();
 
   // Matrix layout support
   const bool is_matrix = (layout.type == LedLayoutType::Matrix && layout.width > 0 && layout.height > 0);
@@ -655,15 +707,23 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     brightness = std::max(brightness, 0.2f);
   }
 
-  // Audio reactivity: ONLY for LEDFx effects, NOT for WLED effects
-  // For LEDFx effects, you can set which frequency range to react to (kick, bass, mids, treble, or custom range)
-  // This works for both WLED devices (via DDP) and local physical segments
-  float audio_mod = 1.0f;
-  const std::string engine = lower_copy(binding.effect.engine);
-  const bool is_ledfx = (engine == "ledfx");
+  // Automatic engine selection based on effect and audio_link
+  // Engine is selected automatically - update binding.effect.engine if needed
+  std::string selected_engine = binding.effect.engine;
+  if (selected_engine.empty() || selected_engine == "auto") {
+    selected_engine = select_engine_auto(binding.effect.effect, binding.effect.audio_link);
+    // Update binding.effect.engine for consistency
+    const_cast<EffectAssignment&>(binding.effect).engine = selected_engine;
+  }
+  const bool is_ledfx = (lower_copy(selected_engine) == "ledfx");
   
-  // Only process audio for LEDFx effects
-  if (binding.effect.audio_link && is_ledfx) {
+  // Audio reactivity: For effects that support it (both WLED and LEDFx)
+  // WLED audio-reactive effects (Beat Pulse, Beat Bars, etc.) can use audio
+  // LEDFx effects always use audio when audio_link is enabled
+  float audio_mod = 1.0f;
+  
+  // Process audio for effects that support it
+  if (binding.effect.audio_link && (is_ledfx || effect_is_audio_reactive(binding.effect.effect))) {
     // Get audio metrics with timestamp for synchronization
     AudioMetrics metrics = led_audio_get_metrics();
     float energy = metrics.energy;
@@ -742,8 +802,9 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     }
   }
 
-  // Attack/release envelope to smooth out audio reactivity (only for LEDFx)
-  if (binding.effect.audio_link && is_ledfx && (binding.effect.attack_ms > 0 || binding.effect.release_ms > 0) && fps > 0) {
+  // Attack/release envelope to smooth out audio reactivity (for LEDFx and WLED audio-reactive effects)
+  if (binding.effect.audio_link && (is_ledfx || effect_is_audio_reactive(binding.effect.effect)) && 
+      (binding.effect.attack_ms > 0 || binding.effect.release_ms > 0) && fps > 0) {
     audio_mod = apply_envelope(envelope_key(binding), audio_mod, fps, binding.effect.attack_ms, binding.effect.release_ms);
   }
 
@@ -775,6 +836,14 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
   const uint8_t speed_val = binding.effect.speed;
   // Intensity: 0-255
   const uint8_t intensity_val = binding.effect.intensity;
+  
+  // Get audio metrics for WLED audio-reactive effects
+  AudioMetrics audio_metrics = led_audio_get_metrics();
+  const float beat = binding.effect.audio_link ? audio_metrics.beat : 0.0f;
+  const float energy = binding.effect.audio_link ? std::max(0.3f, audio_metrics.energy) : 0.5f;
+  const float bass = binding.effect.audio_link ? std::max(0.3f, audio_metrics.bass) : 0.5f;
+  const float mid = binding.effect.audio_link ? std::max(0.3f, audio_metrics.mid) : 0.5f;
+  const float treble = binding.effect.audio_link ? std::max(0.3f, audio_metrics.treble) : 0.5f;
   (void)intensity_val;  // Used in various effects
   const bool reverse = lower_copy(binding.effect.direction) == "reverse";
 
@@ -816,6 +885,22 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
 
   // Solid - static color
   if (effect_name.find("solid") != std::string::npos) {
+    // Use PPA for large segments/matrices (optimized threshold)
+    // Note: PPA uses blocking mode, but operations are fast enough (<1ms for typical sizes)
+    // to not cause audio sync issues. For very large segments, consider timeout.
+    if (should_use_ppa_fill(pixels, is_matrix, matrix_width, matrix_height)) {
+      const uint8_t r = to_byte(c1.r * brightness);
+      const uint8_t g = to_byte(c1.g * brightness);
+      const uint8_t b = to_byte(c1.b * brightness);
+      // PPA works on 2D buffers - use actual matrix dimensions if available
+      // PPA fill is typically <1ms even for 1000+ LEDs, so blocking is acceptable
+      esp_err_t err = ppa_accel::fill_rgb(frame.data(), matrix_width, matrix_height, r, g, b);
+      if (err == ESP_OK) {
+        return frame;  // PPA fill succeeded
+      }
+      // Fall through to software fill if PPA fails (should be rare)
+    }
+    // Software fallback (for small segments or if PPA unavailable)
     for (uint16_t i = 0; i < pixels; ++i) {
       *dst++ = to_byte(c1.r * brightness);
       *dst++ = to_byte(c1.g * brightness);
@@ -861,6 +946,72 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     const uint16_t pos_in_cycle = (counter / 2) % cycle_frames;
     const uint16_t fill_led = pos_in_cycle < pixels ? pos_in_cycle : (cycle_frames - pos_in_cycle - 1);
     
+    // For large segments, use PPA: fill background first, then blend foreground
+    if (should_use_ppa_fill(pixels, is_matrix, matrix_width, matrix_height)) {
+      const uint8_t bg_r = to_byte(c2.r * brightness * 0.05f);
+      const uint8_t bg_g = to_byte(c2.g * brightness * 0.05f);
+      const uint8_t bg_b = to_byte(c2.b * brightness * 0.05f);
+      
+      // Fill entire buffer with background color using PPA
+      esp_err_t err = ppa_accel::fill_rgb(frame.data(), matrix_width, matrix_height, bg_r, bg_g, bg_b);
+      if (err == ESP_OK) {
+        // Now blend foreground color for filled portion
+        // Calculate fill region based on matrix or strip layout
+        if (is_matrix) {
+          // For matrices, calculate fill region in 2D
+          const uint16_t fill_row = fill_led / matrix_width;
+          const uint16_t fill_col = fill_led % matrix_width;
+          // Create temporary buffer for foreground
+          std::vector<uint8_t> fg_buffer(pixels * 3, 0);
+          const uint8_t fg_r = to_byte(c1.r * brightness);
+          const uint8_t fg_g = to_byte(c1.g * brightness);
+          const uint8_t fg_b = to_byte(c1.b * brightness);
+          
+          // Fill foreground region
+          for (uint16_t row = 0; row <= fill_row && row < matrix_height; ++row) {
+            const uint16_t max_col = (row == fill_row) ? fill_col : matrix_width;
+            for (uint16_t col = 0; col < max_col; ++col) {
+              const uint16_t idx = row * matrix_width + col;
+              fg_buffer[idx * 3 + 0] = fg_r;
+              fg_buffer[idx * 3 + 1] = fg_g;
+              fg_buffer[idx * 3 + 2] = fg_b;
+            }
+          }
+          
+          // Blend foreground over background using PPA
+          if (should_use_ppa_blend(pixels, is_matrix, matrix_width, matrix_height)) {
+            ppa_accel::blend_rgb(fg_buffer.data(), frame.data(), frame.data(), 
+                                 matrix_width, matrix_height, 1.0f);
+          } else {
+            // Software blend for smaller regions
+            for (uint16_t i = 0; i < pixels; ++i) {
+              if (fg_buffer[i * 3] > 0 || fg_buffer[i * 3 + 1] > 0 || fg_buffer[i * 3 + 2] > 0) {
+                frame[i * 3 + 0] = fg_buffer[i * 3 + 0];
+                frame[i * 3 + 1] = fg_buffer[i * 3 + 1];
+                frame[i * 3 + 2] = fg_buffer[i * 3 + 2];
+              }
+            }
+          }
+        } else {
+          // For strips, simpler approach: fill foreground region directly
+          const uint8_t fg_r = to_byte(c1.r * brightness);
+          const uint8_t fg_g = to_byte(c1.g * brightness);
+          const uint8_t fg_b = to_byte(c1.b * brightness);
+          for (uint16_t i = 0; i <= fill_led && i < pixels; ++i) {
+            const uint16_t idx = reverse ? (pixels - 1 - i) : i;
+            if (idx <= fill_led) {
+              frame[idx * 3 + 0] = fg_r;
+              frame[idx * 3 + 1] = fg_g;
+              frame[idx * 3 + 2] = fg_b;
+            }
+          }
+        }
+        return frame;
+      }
+      // Fall through to software if PPA fill fails
+    }
+    
+    // Software fallback (for small segments or if PPA unavailable)
     for (uint16_t i = 0; i < pixels; ++i) {
       const uint16_t idx = reverse ? (pixels - 1 - i) : i;
       if (idx <= fill_led) {
@@ -876,7 +1027,7 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     return frame;
   }
 
-  // Fire 2012 - classic FastLED/WLED fire (always use linear strip mode for reliability)
+  // Fire 2012 - classic FastLED/WLED fire (optimized for large segments and matrices)
   if (effect_name.find("fire") != std::string::npos) {
     // Original WLED parameters
     const uint8_t COOLING = 20 + (speed_val / 3);
@@ -886,6 +1037,13 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     const std::string state_key = "fire_" + binding.device_id + "_" + std::to_string(pixels);
     auto& heat = get_wled_state(state_key, pixels);
 
+    // For large segments/matrices, use framebuffer for heat map processing
+    std::shared_ptr<framebuffer::Framebuffer> heat_fb = nullptr;
+    if (pixels >= 500 || (is_matrix && matrix_width * matrix_height >= 500)) {
+      const std::string fb_key = "fire_fb_" + binding.device_id + "_" + std::to_string(pixels);
+      heat_fb = framebuffer::get_manager().get_framebuffer(fb_key, matrix_width, matrix_height);
+    }
+
     // Step 1: Cool down every cell
     for (uint16_t i = 0; i < pixels; ++i) {
       uint8_t cooldown = (esp_random() % (((COOLING * 10) / pixels) + 2));
@@ -893,8 +1051,23 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     }
 
     // Step 2: Heat drifts up and diffuses
-    for (int k = pixels - 1; k >= 2; --k) {
-      heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2]) / 3;
+    // For matrices, use 2D diffusion; for strips, use 1D
+    if (is_matrix && heat_fb) {
+      // 2D diffusion for matrices (more realistic fire)
+      for (uint16_t row = matrix_height - 1; row > 0; --row) {
+        for (uint16_t col = 0; col < matrix_width; ++col) {
+          const uint16_t idx = row * matrix_width + col;
+          const uint16_t idx_up = (row - 1) * matrix_width + col;
+          if (idx < pixels && idx_up < pixels) {
+            heat[idx] = (heat[idx_up] + heat[idx] * 2) / 3;
+          }
+        }
+      }
+    } else {
+      // 1D diffusion for strips (original algorithm)
+      for (int k = pixels - 1; k >= 2; --k) {
+        heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2]) / 3;
+      }
     }
 
     // Step 3: Randomly ignite sparks near bottom
@@ -905,22 +1078,63 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     }
 
     // Step 4: Convert heat to LED colors
-    uint8_t* dst = frame.data();
-    for (uint16_t i = 0; i < pixels; ++i) {
-      const uint16_t idx = reverse ? i : (pixels - 1 - i);
-      const uint8_t temperature = heat[idx];
+    // For large segments, use PPA fill for background, then blend fire colors
+    if (should_use_ppa_fill(pixels, is_matrix, matrix_width, matrix_height) && heat_fb) {
+      // Clear framebuffer with black background
+      heat_fb->clear();
       
-      uint8_t r, g, b;
-      uint8_t t192 = (temperature > 0) ? ((temperature * 191) / 255 + 1) : 0;
-      uint8_t heatramp = (t192 & 0x3F) << 2;
+      // Render heat map to framebuffer
+      for (uint16_t i = 0; i < pixels; ++i) {
+        const uint16_t idx = reverse ? i : (pixels - 1 - i);
+        const uint8_t temperature = heat[idx];
+        
+        uint8_t r, g, b;
+        uint8_t t192 = (temperature > 0) ? ((temperature * 191) / 255 + 1) : 0;
+        uint8_t heatramp = (t192 & 0x3F) << 2;
+        
+        if (t192 > 0x80) { r = 255; g = 255; b = heatramp; }
+        else if (t192 > 0x40) { r = 255; g = heatramp; b = 0; }
+        else { r = heatramp; g = 0; b = 0; }
+        
+        if (is_matrix) {
+          auto [col, row] = get_coords(idx);
+          uint8_t* px = heat_fb->pixel(col, row);
+          if (px) {
+            px[0] = static_cast<uint8_t>(r * brightness);
+            px[1] = static_cast<uint8_t>(g * brightness);
+            px[2] = static_cast<uint8_t>(b * brightness);
+          }
+        } else {
+          uint8_t* px = heat_fb->pixel(idx, 0);
+          if (px) {
+            px[0] = static_cast<uint8_t>(r * brightness);
+            px[1] = static_cast<uint8_t>(g * brightness);
+            px[2] = static_cast<uint8_t>(b * brightness);
+          }
+        }
+      }
       
-      if (t192 > 0x80) { r = 255; g = 255; b = heatramp; }
-      else if (t192 > 0x40) { r = 255; g = heatramp; b = 0; }
-      else { r = heatramp; g = 0; b = 0; }
-      
-      *dst++ = static_cast<uint8_t>(r * brightness);
-      *dst++ = static_cast<uint8_t>(g * brightness);
-      *dst++ = static_cast<uint8_t>(b * brightness);
+      // Copy from framebuffer to output frame
+      heat_fb->copy_to(frame);
+    } else {
+      // Software rendering (for small segments or if framebuffer unavailable)
+      uint8_t* dst = frame.data();
+      for (uint16_t i = 0; i < pixels; ++i) {
+        const uint16_t idx = reverse ? i : (pixels - 1 - i);
+        const uint8_t temperature = heat[idx];
+        
+        uint8_t r, g, b;
+        uint8_t t192 = (temperature > 0) ? ((temperature * 191) / 255 + 1) : 0;
+        uint8_t heatramp = (t192 & 0x3F) << 2;
+        
+        if (t192 > 0x80) { r = 255; g = 255; b = heatramp; }
+        else if (t192 > 0x40) { r = 255; g = heatramp; b = 0; }
+        else { r = heatramp; g = 0; b = 0; }
+        
+        *dst++ = static_cast<uint8_t>(r * brightness);
+        *dst++ = static_cast<uint8_t>(g * brightness);
+        *dst++ = static_cast<uint8_t>(b * brightness);
+      }
     }
     return frame;
   }
@@ -1171,6 +1385,253 @@ std::vector<uint8_t> WledEffectsRuntime::render_frame(const WledEffectBinding& b
     return frame;
   }
 
+  // ==================== WLED AUDIO-REACTIVE EFFECTS ====================
+  
+  // Beat Pulse - pulse on beat detection (WLED audio-reactive)
+  if (effect_name.find("beat pulse") != std::string::npos || effect_name.find("beatpulse") != std::string::npos) {
+    static float pulse_level = 0.0f;
+    if (binding.effect.audio_link && beat > 0.7f) {
+      pulse_level = 1.0f;
+    }
+    const float level = pulse_level * intensity_val / 255.0f;
+    pulse_level *= 0.92f;  // Decay
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+  
+  // Beat Bars - bars scaled by beat (WLED audio-reactive)
+  if (effect_name.find("beat bars") != std::string::npos || effect_name.find("beatbars") != std::string::npos) {
+    const uint8_t bar_count = 4 + (intensity_val >> 5);
+    const uint16_t bar_width = pixels / bar_count;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const uint8_t bar_idx = i / bar_width;
+      float bar_level = 0.0f;
+      
+      if (binding.effect.audio_link) {
+        // Each bar responds to different frequency
+        switch (bar_idx % 4) {
+          case 0: bar_level = bass; break;
+          case 1: bar_level = mid; break;
+          case 2: bar_level = treble; break;
+          default: bar_level = energy; break;
+        }
+        bar_level *= (0.6f + beat * 0.4f);
+      } else {
+        // Without audio: animated bars
+        const float phase = static_cast<float>(counter >> 4) / 255.0f + bar_idx * 0.25f;
+        bar_level = (sinf(phase * 6.2831f) + 1.0f) * 0.5f;
+      }
+      
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * bar_level * intensity_val / 255.0f);
+      *dst++ = to_byte(col.g * brightness * bar_level * intensity_val / 255.0f);
+      *dst++ = to_byte(col.b * brightness * bar_level * intensity_val / 255.0f);
+    }
+    return frame;
+  }
+  
+  // Beat Scatter - beat-driven scatter (WLED audio-reactive)
+  if (effect_name.find("beat scatter") != std::string::npos || effect_name.find("beatscatter") != std::string::npos) {
+    // Clear background
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(c2.r * brightness * 0.05f);
+      *dst++ = to_byte(c2.g * brightness * 0.05f);
+      *dst++ = to_byte(c2.b * brightness * 0.05f);
+    }
+    
+    if (binding.effect.audio_link && beat > 0.6f) {
+      // Scatter random pixels on beat
+      const uint8_t scatter_count = static_cast<uint8_t>(beat * intensity_val / 32);
+      for (uint8_t j = 0; j < scatter_count; ++j) {
+        const uint16_t idx = esp_random() % pixels;
+        uint8_t* p = frame.data() + idx * 3;
+        p[0] = to_byte(c1.r * brightness);
+        p[1] = to_byte(c1.g * brightness);
+        p[2] = to_byte(c1.b * brightness);
+      }
+    }
+    return frame;
+  }
+  
+  // Beat Light - simple beat flashes (WLED audio-reactive)
+  if (effect_name.find("beat light") != std::string::npos || effect_name.find("beatlight") != std::string::npos) {
+    static float flash_level = 0.0f;
+    if (binding.effect.audio_link && beat > 0.7f) {
+      flash_level = 1.0f;
+    }
+    flash_level *= 0.88f;  // Fast decay
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      *dst++ = to_byte(c1.r * brightness * flash_level);
+      *dst++ = to_byte(c1.g * brightness * flash_level);
+      *dst++ = to_byte(c1.b * brightness * flash_level);
+    }
+    return frame;
+  }
+  
+  // Energy Flow - directional energy trails (WLED audio-reactive)
+  if (effect_name.find("energy flow") != std::string::npos || effect_name.find("energyflow") != std::string::npos) {
+    const std::string state_key = "energy_flow_" + binding.device_id + "_" + std::to_string(pixels);
+    auto& energy_trail = get_wled_state(state_key, pixels);
+    
+    // Fade trail
+    for (uint16_t i = 0; i < pixels; ++i) {
+      energy_trail[i] = (energy_trail[i] > 15) ? energy_trail[i] - 15 : 0;
+    }
+    
+    // Add energy on beat or continuous flow
+    if (binding.effect.audio_link) {
+      const float energy_level = (bass * 0.4f + mid * 0.3f + treble * 0.3f) * intensity_val / 255.0f;
+      const uint16_t energy_pos = static_cast<uint16_t>((counter >> 2) % pixels);
+      const int idx = reverse ? (pixels - 1 - energy_pos) : energy_pos;
+      if (idx >= 0 && idx < static_cast<int>(pixels)) {
+        energy_trail[idx] = std::min(255, static_cast<int>(energy_trail[idx]) + static_cast<int>(energy_level * 255.0f));
+      }
+    } else {
+      // Without audio: continuous flow
+      const uint16_t flow_pos = (counter >> 3) % pixels;
+      const int idx = reverse ? (pixels - 1 - flow_pos) : flow_pos;
+      if (idx >= 0 && idx < static_cast<int>(pixels)) {
+        energy_trail[idx] = 255;
+      }
+    }
+    
+    // Render
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float level = energy_trail[i] / 255.0f;
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const Rgb col = gradient.empty() ? 
+        (level > 0.5f ? c1 : c2) : 
+        sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+  
+  // Energy Burst - short bursts, beat friendly (WLED audio-reactive)
+  if (effect_name.find("energy burst") != std::string::npos || effect_name.find("energyburst") != std::string::npos) {
+    static float burst_level = 0.0f;
+    static float burst_pos = 0.0f;
+    
+    if (binding.effect.audio_link && beat > 0.7f) {
+      burst_level = 1.0f;
+      burst_pos = 0.0f;
+    }
+    
+    burst_level *= 0.9f;
+    burst_pos += 0.05f * speed_val / 128.0f;
+    if (burst_pos > 1.0f) burst_pos = 0.0f;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const float dist = std::abs(pos - burst_pos);
+      float level = 0.0f;
+      
+      if (dist < 0.1f && burst_level > 0.1f) {
+        level = burst_level * (1.0f - dist / 0.1f);
+      }
+      
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+  
+  // Energy Waves - layered waves, fast (WLED audio-reactive)
+  if (effect_name.find("energy waves") != std::string::npos || effect_name.find("energywaves") != std::string::npos) {
+    const float wave_speed = speed_val / 255.0f;
+    const float wave_offset = static_cast<float>(counter >> 3) * wave_speed * 0.1f;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      float wave = sinf((pos + wave_offset) * 6.2831f * 2.0f);
+      wave += sinf((pos * 2.0f + wave_offset * 0.7f) * 6.2831f * 1.5f);
+      wave = (wave + 2.0f) / 4.0f;
+      
+      if (binding.effect.audio_link) {
+        wave *= (0.5f + energy * 0.5f);
+        wave *= (0.6f + beat * 0.4f);
+      }
+      
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * wave * intensity_val / 255.0f);
+      *dst++ = to_byte(col.g * brightness * wave * intensity_val / 255.0f);
+      *dst++ = to_byte(col.b * brightness * wave * intensity_val / 255.0f);
+    }
+    return frame;
+  }
+  
+  // Power+ - punchy energy beams (WLED audio-reactive)
+  if (effect_name.find("power+") != std::string::npos || effect_name.find("powerplus") != std::string::npos) {
+    const uint8_t beam_count = 2 + (intensity_val >> 6);
+    const float beam_spacing = 1.0f / beam_count;
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      float level = 0.0f;
+      
+      for (uint8_t b = 0; b < beam_count; ++b) {
+        const float beam_pos = std::fmod(static_cast<float>(counter >> 4) * 0.01f + b * beam_spacing, 1.0f);
+        const float dist = std::abs(pos - beam_pos);
+        if (dist < 0.05f) {
+          level = std::max(level, 1.0f - dist / 0.05f);
+        }
+      }
+      
+      if (binding.effect.audio_link) {
+        level *= (0.5f + bass * 0.5f);
+        level *= (0.7f + beat * 0.3f);
+      }
+      
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+  
+  // Power Cycle - cycled energy pulses (WLED audio-reactive)
+  if (effect_name.find("power cycle") != std::string::npos || effect_name.find("powercycle") != std::string::npos) {
+    const float cycle_pos = std::fmod(static_cast<float>(counter >> 3) * 0.02f, 1.0f);
+    
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      const float dist = std::abs(pos - cycle_pos);
+      float level = 0.0f;
+      
+      if (dist < 0.15f) {
+        level = 1.0f - dist / 0.15f;
+      }
+      
+      if (binding.effect.audio_link) {
+        level *= (0.6f + energy * 0.4f);
+        if (beat > 0.7f) {
+          level = std::min(1.0f, level * 1.5f);
+        }
+      }
+      
+      const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, pos);
+      *dst++ = to_byte(col.r * brightness * level);
+      *dst++ = to_byte(col.g * brightness * level);
+      *dst++ = to_byte(col.b * brightness * level);
+    }
+    return frame;
+  }
+  
   // Default fallback - gradient scroll
   const uint8_t offset = static_cast<uint8_t>((counter >> 4) & 0xFF);
   for (uint16_t i = 0; i < pixels; ++i) {
@@ -1355,10 +1816,15 @@ void WledEffectsRuntime::task_loop() {
     bool needs_audio_sync = false;
     for (const auto& binding : fx.bindings) {
       if (binding.enabled && binding.effect.audio_link) {
-        // Only sync for LEDFx effects, not WLED effects
-        const std::string engine = lower_copy(binding.effect.engine);
-        const bool is_ledfx = (engine == "ledfx");
-        if (is_ledfx) {
+        // Sync for LEDFx effects and WLED audio-reactive effects
+        // Auto-select engine if not set
+        std::string engine = binding.effect.engine;
+        if (engine.empty() || lower_copy(engine) == "auto") {
+          engine = select_engine_auto(binding.effect.effect, binding.effect.audio_link);
+        }
+        const bool is_ledfx = (lower_copy(engine) == "ledfx");
+        const bool is_wled_audio = (lower_copy(engine) == "wled" && effect_is_audio_reactive(binding.effect.effect));
+        if (is_ledfx || is_wled_audio) {
           needs_audio_sync = true;
           break;
         }
@@ -1367,9 +1833,12 @@ void WledEffectsRuntime::task_loop() {
     
     if (needs_audio_sync && audio_metrics.timestamp_us > 0) {
       // Calculate when we should render this frame based on audio timestamp
-      // We want to render slightly before the audio plays (account for LED update time)
+      // We want to render slightly before the audio plays (account for LED update time + PPA overhead)
+      // PPA operations (fill/blend) typically take <1ms for most segments, but can be 2-5ms for very large ones
+      // We account for this in the timing calculation
       const uint64_t led_update_time_us = 5000;  // ~5ms for LED update
-      const uint64_t target_render_time = audio_metrics.timestamp_us - led_update_time_us;
+      const uint64_t ppa_overhead_us = 2000;  // ~2ms worst-case PPA overhead (for very large segments)
+      const uint64_t target_render_time = audio_metrics.timestamp_us - led_update_time_us - ppa_overhead_us;
       
       if (target_render_time > now_us) {
         // Wait until it's time to render (but don't wait too long - max 50ms)
@@ -1378,6 +1847,8 @@ void WledEffectsRuntime::task_loop() {
           vTaskDelay(pdMS_TO_TICKS((wait_us / 1000) + 1));
         }
       }
+      // Note: If PPA operations take longer than expected, the audio sync will naturally
+      // compensate on the next frame (we render slightly ahead, so small delays are absorbed)
       // last_audio_timestamp_us = audio_metrics.timestamp_us;  // Reserved for future use
     }
     

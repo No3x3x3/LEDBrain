@@ -1,5 +1,6 @@
 #include "ledfx_effects.hpp"
 #include "led_engine/audio_pipeline.hpp"
+#include "led_engine/ppa_accelerator.hpp"  // PPA hardware acceleration
 #include "esp_log.h"
 #include "esp_random.h"
 #include <algorithm>
@@ -333,10 +334,56 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
   }
 
   // Magnitude - fills strip based on overall audio level (LedFX style)
+  // Optimized with PPA for large segments
   if (name_lower.find("magnitude") != std::string::npos) {
     const float mag_level = energy * intensity;
     const uint16_t lit_leds = static_cast<uint16_t>(mag_level * pixels);
     
+    // For large segments (1000+ LEDs), use PPA fill for background, then blend lit portion
+    if (pixels >= 1000 && ppa_accel::is_available()) {
+      // Fill background with black using PPA
+      esp_err_t err = ppa_accel::fill_rgb(frame.data(), pixels, 1, 0, 0, 0);
+      if (err == ESP_OK) {
+        // Create foreground buffer for lit LEDs
+        std::vector<uint8_t> fg_buffer(pixels * 3, 0);
+        for (uint16_t i = 0; i < pixels; ++i) {
+          const uint16_t idx = direction > 0 ? i : (pixels - 1 - i);
+          float level = 0.0f;
+          
+          if (idx < lit_leds) {
+            level = 1.0f;
+          } else if (idx < lit_leds + 3 && lit_leds > 0) {
+            level = 1.0f - (static_cast<float>(idx - lit_leds) / 3.0f);
+          }
+          
+          if (level > 0.0f) {
+            const float grad_pos = static_cast<float>(i) / static_cast<float>(pixels);
+            const Rgb col = gradient.empty() ? hsv_to_rgb(grad_pos * 0.3f, 1.0f, 1.0f) : sample_gradient(gradient, grad_pos);
+            fg_buffer[i * 3 + 0] = to_byte(col.r * brightness * level);
+            fg_buffer[i * 3 + 1] = to_byte(col.g * brightness * level);
+            fg_buffer[i * 3 + 2] = to_byte(col.b * brightness * level);
+          }
+        }
+        
+        // Blend foreground over background using PPA
+        if (pixels >= 200) {
+          ppa_accel::blend_rgb(fg_buffer.data(), frame.data(), frame.data(), pixels, 1, 1.0f);
+        } else {
+          // Software blend for smaller segments
+          for (uint16_t i = 0; i < pixels; ++i) {
+            if (fg_buffer[i * 3] > 0 || fg_buffer[i * 3 + 1] > 0 || fg_buffer[i * 3 + 2] > 0) {
+              frame[i * 3 + 0] = fg_buffer[i * 3 + 0];
+              frame[i * 3 + 1] = fg_buffer[i * 3 + 1];
+              frame[i * 3 + 2] = fg_buffer[i * 3 + 2];
+            }
+          }
+        }
+        return frame;
+      }
+      // Fall through to software if PPA fails
+    }
+    
+    // Software rendering (for small segments or if PPA unavailable)
     for (uint16_t i = 0; i < pixels; ++i) {
       const uint16_t idx = direction > 0 ? i : (pixels - 1 - i);
       float level = 0.0f;
@@ -634,6 +681,183 @@ std::vector<uint8_t> render_effect(const std::string& effect_name,
       *dst++ = to_byte(col.r * brightness * intensity);
       *dst++ = to_byte(col.g * brightness * intensity);
       *dst++ = to_byte(col.b * brightness * intensity);
+    }
+    return frame;
+  }
+
+  // Paintbrush - audio-reactive organic brush strokes (WLED-MM style)
+  if (name_lower.find("paintbrush") != std::string::npos) {
+    std::string state_key = "paintbrush_" + std::to_string(led_count);
+    auto& brush_state = get_state(state_key, pixels);
+    
+    // Brush strokes respond to audio with organic, flowing motion
+    const float brush_speed = speed * 0.3f;
+    const float audio_response = effect.audio_link ? (bass * 0.4f + mid * 0.3f + treble * 0.3f) : 0.5f;
+    
+    // Create brush strokes that flow and respond to audio
+    for (uint16_t i = 0; i < pixels; ++i) {
+      const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+      
+      // Multiple brush strokes with different phases
+      float brush_value = 0.0f;
+      for (int stroke = 0; stroke < 3; ++stroke) {
+        const float stroke_phase = (t * brush_speed * (0.5f + stroke * 0.3f) + pos * 2.0f + stroke * 0.7f);
+        const float stroke_pos = std::fmod(stroke_phase, 1.0f);
+        const float dist = std::abs(pos - stroke_pos);
+        
+        // Brush stroke width varies with audio
+        const float stroke_width = 0.08f + audio_response * 0.15f;
+        if (dist < stroke_width) {
+          // Gaussian-like falloff for smooth brush edges
+          const float falloff = 1.0f - (dist / stroke_width);
+          const float stroke_intensity = falloff * falloff * (0.6f + audio_response * 0.4f);
+          brush_value = std::max(brush_value, stroke_intensity);
+        }
+      }
+      
+      // Add some randomness for organic feel
+      brush_state[i] = brush_state[i] * 0.85f + brush_value * 0.15f;
+      
+      // Color varies along the strip with gradient
+      const float color_pos = std::fmod(pos + t * speed * 0.1f, 1.0f);
+      const Rgb col = gradient.empty() ? 
+        hsv_to_rgb(color_pos + t * 0.05f, 0.8f + audio_response * 0.2f, 1.0f) :
+        sample_gradient(gradient, color_pos);
+      
+      // Apply brush intensity with audio modulation
+      const float final_level = brush_state[i] * intensity * (0.7f + audio_response * 0.3f);
+      *dst++ = to_byte(col.r * brightness * final_level);
+      *dst++ = to_byte(col.g * brightness * final_level);
+      *dst++ = to_byte(col.b * brightness * final_level);
+    }
+    return frame;
+  }
+
+  // 3D GEQ - 3D visualization of 32-channel GEQ spectrum (requires 2D matrix)
+  if (name_lower.find("3d geq") != std::string::npos || name_lower.find("3dgeq") != std::string::npos || 
+      name_lower.find("3d_geq") != std::string::npos) {
+    // Check if this is a 2D matrix (requires matrix configuration)
+    // For 1D strips, fall back to regular GEQ visualization
+    const bool is_2d = effect.segment_id.find("matrix") != std::string::npos || 
+                       pixels > 200;  // Heuristic: large LED count might be matrix
+    
+    if (is_2d && effect.audio_link) {
+      // 3D GEQ for 2D matrices: map 32 GEQ bands to height/depth
+      // Each column represents a frequency band, height represents amplitude
+      const int geq_bands = 32;
+      const int columns = std::min(geq_bands, static_cast<int>(pixels));
+      const int rows = pixels / columns;  // Approximate rows (for 2D)
+      
+      // Get 32-channel GEQ data from current metrics
+      const float* geq_data = metrics.geq_bands;  // metrics is already retrieved at function start
+      
+      for (uint16_t i = 0; i < pixels; ++i) {
+        const int col = i % columns;
+        const int row = i / columns;
+        
+        // Map column to GEQ band
+        const int band_idx = (col * geq_bands) / columns;
+        const float band_value = band_idx < geq_bands ? geq_data[band_idx] : 0.0f;
+        
+        // Calculate height in 3D space (normalized 0-1)
+        const float normalized_row = static_cast<float>(row) / static_cast<float>(rows);
+        const float height = band_value * intensity;
+        
+        // 3D effect: pixels below the height are lit, creating a 3D bar chart effect
+        float level = 0.0f;
+        if (normalized_row <= height) {
+          // Distance from the "surface" affects brightness (3D depth effect)
+          const float depth = height - normalized_row;
+          level = 0.3f + depth * 0.7f;
+          
+          // Add perspective effect (brighter at top, darker at bottom)
+          const float perspective = 1.0f - normalized_row * 0.3f;
+          level *= perspective;
+        }
+        
+        // Color based on frequency band (low = red, mid = green, high = blue)
+        Rgb col;
+        if (band_idx < 8) {
+          // Bass: red to orange
+          col = {1.0f, band_idx / 8.0f * 0.5f, 0.0f};
+        } else if (band_idx < 20) {
+          // Mid: yellow to green
+          const float mid_pos = (band_idx - 8) / 12.0f;
+          col = {1.0f - mid_pos, 1.0f, 0.0f};
+        } else {
+          // Treble: cyan to blue
+          const float treble_pos = (band_idx - 20) / 12.0f;
+          col = {0.0f, 1.0f - treble_pos * 0.5f, treble_pos};
+        }
+        
+        // Apply gradient if specified
+        if (!gradient.empty()) {
+          const float grad_pos = static_cast<float>(band_idx) / static_cast<float>(geq_bands);
+          col = sample_gradient(gradient, grad_pos);
+        }
+        
+        *dst++ = to_byte(col.r * brightness * level);
+        *dst++ = to_byte(col.g * brightness * level);
+        *dst++ = to_byte(col.b * brightness * level);
+      }
+    } else {
+      // 1D GEQ visualization: map 32 bands to LED strip
+      if (effect.audio_link) {
+        const int geq_bands = 32;
+        const float bands_per_led = static_cast<float>(geq_bands) / static_cast<float>(pixels);
+        
+        for (uint16_t i = 0; i < pixels; ++i) {
+          const int band_start = static_cast<int>(i * bands_per_led);
+          const int band_end = static_cast<int>((i + 1) * bands_per_led);
+          
+          // Average energy across bands for this LED
+          float avg_energy = 0.0f;
+          int band_count = 0;
+          for (int b = band_start; b < band_end && b < geq_bands; ++b) {
+            avg_energy += metrics.geq_bands[b];
+            band_count++;
+          }
+          if (band_count > 0) {
+            avg_energy /= static_cast<float>(band_count);
+          }
+          
+          // Color based on frequency position
+          const float freq_pos = static_cast<float>(i) / static_cast<float>(pixels);
+          Rgb col;
+          if (freq_pos < 0.33f) {
+            // Bass: red
+            col = {1.0f, freq_pos * 3.0f * 0.3f, 0.0f};
+          } else if (freq_pos < 0.66f) {
+            // Mid: green
+            const float mid_pos = (freq_pos - 0.33f) * 3.0f;
+            col = {1.0f - mid_pos, 1.0f, 0.0f};
+          } else {
+            // Treble: blue
+            const float treble_pos = (freq_pos - 0.66f) * 3.0f;
+            col = {0.0f, 1.0f - treble_pos * 0.5f, treble_pos};
+          }
+          
+          if (!gradient.empty()) {
+            col = sample_gradient(gradient, freq_pos);
+          }
+          
+          const float level = avg_energy * intensity;
+          *dst++ = to_byte(col.r * brightness * level);
+          *dst++ = to_byte(col.g * brightness * level);
+          *dst++ = to_byte(col.b * brightness * level);
+        }
+      } else {
+        // No audio: show gradient
+        const float offset = t * speed * 0.2f * direction;
+        for (uint16_t i = 0; i < pixels; ++i) {
+          const float pos = static_cast<float>(i) / static_cast<float>(pixels);
+          const float phase = std::fmod(pos + offset, 1.0f);
+          const Rgb col = gradient.empty() ? c1 : sample_gradient(gradient, phase);
+          *dst++ = to_byte(col.r * brightness * intensity * 0.3f);
+          *dst++ = to_byte(col.g * brightness * intensity * 0.3f);
+          *dst++ = to_byte(col.b * brightness * intensity * 0.3f);
+        }
+      }
     }
     return frame;
   }

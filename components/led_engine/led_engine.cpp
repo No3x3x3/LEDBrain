@@ -88,6 +88,28 @@ esp_err_t LedEngineRuntime::configure_driver(const LedHardwareConfig& cfg) {
     
     log_segment(seg);
   }
+  
+  // Initialize parallel IO mode if parallel_outputs > 1 and we have multiple segments
+  if (cfg.driver == LedDriverType::EspRmt && cfg.parallel_outputs > 1 && cfg.segments.size() > 1) {
+    // Collect segments for parallel mode (up to parallel_outputs or 4, whichever is smaller)
+    const size_t max_parallel = std::min(static_cast<size_t>(cfg.parallel_outputs), 
+                                         std::min(cfg.segments.size(), static_cast<size_t>(4)));
+    std::vector<const LedSegmentConfig*> parallel_segments;
+    for (size_t i = 0; i < max_parallel && i < cfg.segments.size(); ++i) {
+      parallel_segments.push_back(&cfg.segments[i]);
+    }
+    
+    if (parallel_segments.size() > 1) {
+      const esp_err_t parallel_err = rmt_driver_init_parallel_mode(parallel_segments);
+      if (parallel_err != ESP_OK) {
+        ESP_LOGW(TAG, "Parallel IO mode init failed: %s (continuing with sequential mode)", 
+                 esp_err_to_name(parallel_err));
+      } else {
+        ESP_LOGI(TAG, "Parallel IO mode enabled for %zu segments", parallel_segments.size());
+      }
+    }
+  }
+  
   return status;
 }
 

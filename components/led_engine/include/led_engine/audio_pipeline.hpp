@@ -18,6 +18,9 @@ struct AudioMetrics {
   float treble{0.0f};
   float beat{0.0f};        // 0..1 envelope
   float tempo_bpm{0.0f};   // estimated tempo
+  // 32-channel GEQ (Graphic Equalizer) - precise frequency bands
+  // Bands are logarithmically spaced from 20Hz to 20kHz
+  float geq_bands[32]{0.0f};  // 32 frequency bands for high-precision audio analysis
   // FFT magnitude spectrum for custom frequency range calculation
   // Stored as vector of magnitude values (one per FFT bin, up to Nyquist frequency)
   std::vector<float> magnitude_spectrum{};  // magnitude spectrum for custom frequency calculations

@@ -4,11 +4,13 @@
 #include "esp_log.h"
 #include "driver/rmt_tx.h"
 #include "driver/rmt_encoder.h"
+#include "driver/rmt_sync.h"
 #include "driver/gpio.h"
 #include <algorithm>
 #include <cstring>
 #include <stddef.h>
 #include <cmath>
+#include <vector>
 
 #ifndef __containerof
 #define __containerof(ptr, type, member) \
@@ -105,6 +107,8 @@ struct RmtDriverSegment {
 
 static std::vector<RmtDriverSegment> s_segments;
 static std::mutex s_mutex;
+static rmt_sync_manager_handle_t s_sync_manager = nullptr;
+static bool s_parallel_mode_enabled = false;
 
 static rmt_tx_channel_config_t make_channel_config(int gpio, bool enable_dma) {
     rmt_tx_channel_config_t tx_chan_config = {};
@@ -371,6 +375,14 @@ esp_err_t rmt_driver_deinit_segment(int gpio, uint8_t rmt_channel) {
 
 void rmt_driver_deinit_all() {
     std::lock_guard<std::mutex> lock(s_mutex);
+    
+    // Delete sync manager if exists
+    if (s_sync_manager) {
+        rmt_del_sync_manager(s_sync_manager);
+        s_sync_manager = nullptr;
+        s_parallel_mode_enabled = false;
+    }
+    
     for (auto& seg : s_segments) {
         if (seg.initialized) {
             rmt_disable(seg.channel);
@@ -380,5 +392,132 @@ void rmt_driver_deinit_all() {
         }
     }
     s_segments.clear();
+}
+
+// Initialize parallel IO mode - creates sync manager for simultaneous transmission
+esp_err_t rmt_driver_init_parallel_mode(const std::vector<const LedSegmentConfig*>& segments) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    
+    if (s_sync_manager) {
+        ESP_LOGW(TAG, "Parallel mode already initialized");
+        return ESP_OK;
+    }
+    
+    if (segments.empty() || segments.size() > 4) {
+        ESP_LOGE(TAG, "Parallel mode requires 1-4 segments (ESP32-P4 has 4 TX channels)");
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Collect channels for sync manager
+    std::vector<rmt_channel_handle_t> channels;
+    for (const auto* seg : segments) {
+        auto it = std::find_if(s_segments.begin(), s_segments.end(),
+                              [&](const RmtDriverSegment& s) { 
+                                  return s.gpio == seg->gpio && s.rmt_channel == seg->rmt_channel; 
+                              });
+        if (it == s_segments.end() || !it->initialized) {
+            ESP_LOGE(TAG, "Segment GPIO %d not initialized for parallel mode", seg->gpio);
+            return ESP_ERR_INVALID_STATE;
+        }
+        channels.push_back(it->channel);
+    }
+    
+    // Create sync manager
+    rmt_sync_manager_config_t sync_cfg = {};
+    sync_cfg.tx_channel_array = channels.data();
+    sync_cfg.array_size = channels.size();
+    
+    esp_err_t err = rmt_new_sync_manager(&sync_cfg, &s_sync_manager);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create RMT sync manager: %s", esp_err_to_name(err));
+        return err;
+    }
+    
+    s_parallel_mode_enabled = true;
+    ESP_LOGI(TAG, "Parallel IO mode initialized with %zu channels", channels.size());
+    return ESP_OK;
+}
+
+// Render to multiple segments in parallel (simultaneous transmission)
+esp_err_t rmt_driver_render_parallel(const std::vector<ParallelRenderRequest>& requests) {
+    if (!s_parallel_mode_enabled || !s_sync_manager) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    if (requests.empty() || requests.size() > 4) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Prepare all channels first (outside sync)
+    std::vector<rmt_channel_handle_t> channels;
+    std::vector<rmt_encoder_handle_t> encoders;
+    std::vector<uint8_t*> buffers;
+    std::vector<size_t> buffer_sizes;
+    
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        for (const auto& req : requests) {
+            auto it = std::find_if(s_segments.begin(), s_segments.end(),
+                                  [&](const RmtDriverSegment& s) { 
+                                      return s.gpio == req.segment->gpio && 
+                                             s.rmt_channel == req.segment->rmt_channel; 
+                                  });
+            if (it == s_segments.end() || !it->initialized) {
+                ESP_LOGE(TAG, "Segment GPIO %d not found for parallel render", req.segment->gpio);
+                return ESP_ERR_INVALID_STATE;
+            }
+            
+            // Process pixels (same as single render)
+            const size_t pixel_count = std::min(req.length, req.segment->led_count - req.start);
+            const uint8_t input_bytes_per_pixel = 3;
+            const uint8_t* src = req.rgb.data() + req.start * input_bytes_per_pixel;
+            
+            float gamma_color = req.segment->gamma_color > 0.0f ? req.segment->gamma_color : 2.2f;
+            float gamma_brightness = req.segment->gamma_brightness > 0.0f ? req.segment->gamma_brightness : 2.2f;
+            bool apply_gamma_flag = req.segment->apply_gamma;
+            
+            const size_t buffer_size = req.segment->led_count * it->bytes_per_pixel;
+            if (it->buffer.size() < buffer_size) {
+                it->buffer.resize(buffer_size, 0);
+            }
+            
+            // Process pixels to segment buffer
+            for (size_t i = 0; i < pixel_count; ++i) {
+                process_pixel(src + i * input_bytes_per_pixel,
+                             it->buffer.data() + (req.start + i) * it->bytes_per_pixel,
+                             it->color_order,
+                             it->bytes_per_pixel,
+                             gamma_color,
+                             gamma_brightness,
+                             apply_gamma_flag);
+            }
+            
+            channels.push_back(it->channel);
+            encoders.push_back(it->encoder);
+            buffers.push_back(it->buffer.data());
+            buffer_sizes.push_back(buffer_size);
+        }
+    }
+    
+    // Reset sync manager before parallel transmission
+    esp_err_t err = rmt_sync_reset(s_sync_manager);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Sync reset failed: %s", esp_err_to_name(err));
+    }
+    
+    // Transmit on all channels (they will sync automatically)
+    rmt_transmit_config_t tx_config = {};
+    tx_config.loop_count = 0;
+    tx_config.flags.eot_level = 0;
+    
+    for (size_t i = 0; i < channels.size(); ++i) {
+        err = rmt_transmit(channels[i], encoders[i], buffers[i], buffer_sizes[i], &tx_config);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Parallel RMT transmit failed for channel %zu: %s", i, esp_err_to_name(err));
+            // Continue with other channels
+        }
+    }
+    
+    return ESP_OK;
 }
 

@@ -91,69 +91,135 @@ const AUDIO_PROFILES = [
   { value: "ledfx_energy", label: "audio_profile_ledfx_energy" },
   { value: "ledfx_tempo", label: "audio_profile_ledfx_tempo" },
 ];
+// Unified effect library - single list with audio-reactive flag
+// Engine is selected automatically based on effect and audio_link setting
 const EFFECT_LIBRARY = [
   {
-    category: "Ambient",
+    category: "Visual (Non-Audio)",
     effects: [
-      { name: "Rain", desc: "Falling drops with cool tones", engine: "ledfx" },
-      { name: "Rain (Dual)", desc: "Dual-layer rain flow", engine: "wled" },
-      { name: "Waves", desc: "Smooth rolling gradients", engine: "ledfx" },
-      { name: "Plasma", desc: "Animated gradients", engine: "ledfx" },
-      { name: "Aura", desc: "Soft ambient glow", engine: "ledfx" },
-      { name: "Ripple Flow", desc: "Ripples moving across LEDs", engine: "ledfx" },
-      { name: "Matrix", desc: "Matrix-style falling glyphs", engine: "ledfx" },
+      { name: "Solid", desc: "Solid color", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Blink", desc: "Blinking effect", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Breathe", desc: "Breathing pulse", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Chase", desc: "Chasing lights", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Colorloop", desc: "Color loop", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Rainbow", desc: "Rainbow loop", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Rainbow Runner", desc: "Fast rainbow runner", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Rainbow Bands", desc: "Striped rainbow bands", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Rain (Dual)", desc: "Dual-layer rain flow", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Meteor", desc: "Meteor shower", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Meteor Smooth", desc: "Smooth meteor shower", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Candle", desc: "Candle flicker", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Candle Multi", desc: "Multiple candle flickers", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Scanner", desc: "Larson scanner", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Scanner Dual", desc: "Dual-direction scanner", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Theater", desc: "Theater chase", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Noise", desc: "Perlin noise", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Sinelon", desc: "Sinelon effect", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Fireworks", desc: "Bursts and sparks", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Fire 2012", desc: "Classic fire", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Heartbeat", desc: "Heartbeat pulse", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Ripple", desc: "Single ripple", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Pacifica", desc: "Pacifica ocean waves", audio_reactive: false, supports_audio_toggle: false },
+      { name: "Strobe", desc: "Hard strobe", audio_reactive: false, supports_audio_toggle: false },
     ],
   },
   {
-    category: "Energy",
+    category: "Audio-Reactive (WLED)",
     effects: [
-      { name: "Power+", desc: "Punchy energy beams", engine: "wled" },
-      { name: "Power Cycle", desc: "Cycled energy pulses", engine: "wled" },
-      { name: "Energy Flow", desc: "Directional energy trails", engine: "wled" },
-      { name: "Energy Burst", desc: "Short bursts, beat friendly", engine: "wled" },
-      { name: "Energy Waves", desc: "Layered waves, fast", engine: "wled" },
-      { name: "Hyperspace", desc: "Deep-space warp lines", engine: "ledfx" },
+      { name: "Beat Pulse", desc: "Pulse on beat", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Beat Bars", desc: "Bars scaled by beat", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Beat Scatter", desc: "Beat-driven scatter", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Beat Light", desc: "Simple beat flashes", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Energy Flow", desc: "Directional energy trails", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Energy Burst", desc: "Short bursts, beat friendly", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Energy Waves", desc: "Layered waves, fast", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Power+", desc: "Punchy energy beams", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Power Cycle", desc: "Cycled energy pulses", audio_reactive: true, supports_audio_toggle: true },
     ],
   },
   {
-    category: "Rhythm",
+    category: "Audio-Reactive (LEDFx)",
     effects: [
-      { name: "Beat Pulse", desc: "Pulse on beat", engine: "wled" },
-      { name: "Beat Bars", desc: "Bars scaled by beat", engine: "wled" },
-      { name: "Beat Scatter", desc: "Beat-driven scatter", engine: "wled" },
-      { name: "Beat Light", desc: "Simple beat flashes", engine: "wled" },
-      { name: "Strobe", desc: "Hard strobe", engine: "wled" },
-    ],
-  },
-  {
-    category: "Classic",
-    effects: [
-      { name: "Solid", desc: "Solid color", engine: "wled" },
-      { name: "Blink", desc: "Blinking effect", engine: "wled" },
-      { name: "Breathe", desc: "Breathing pulse", engine: "wled" },
-      { name: "Chase", desc: "Chasing lights", engine: "wled" },
-      { name: "Colorloop", desc: "Color loop", engine: "wled" },
-      { name: "Rainbow", desc: "Rainbow loop", engine: "wled" },
-      { name: "Rainbow Runner", desc: "Fast rainbow runner", engine: "wled" },
-      { name: "Rainbow Bands", desc: "Striped rainbow bands", engine: "wled" },
-      { name: "Rain", desc: "Falling rain drops", engine: "wled" },
-      { name: "Meteor", desc: "Meteor shower", engine: "wled" },
-      { name: "Meteor Smooth", desc: "Smooth meteor shower", engine: "wled" },
-      { name: "Candle", desc: "Candle flicker", engine: "wled" },
-      { name: "Candle Multi", desc: "Multiple candle flickers", engine: "wled" },
-      { name: "Scanner", desc: "Larson scanner", engine: "wled" },
-      { name: "Scanner Dual", desc: "Dual-direction scanner", engine: "wled" },
-      { name: "Theater", desc: "Theater chase", engine: "wled" },
-      { name: "Noise", desc: "Perlin noise", engine: "wled" },
-      { name: "Sinelon", desc: "Sinelon effect", engine: "wled" },
-      { name: "Fireworks", desc: "Bursts and sparks", engine: "wled" },
-      { name: "Fire 2012", desc: "Classic fire", engine: "wled" },
-      { name: "Heartbeat", desc: "Heartbeat pulse", engine: "wled" },
-      { name: "Ripple", desc: "Single ripple", engine: "wled" },
-      { name: "Pacifica", desc: "Pacifica ocean waves", engine: "wled" },
+      { name: "Paintbrush", desc: "Audio-reactive organic brush strokes", audio_reactive: true, supports_audio_toggle: false },
+      { name: "3D GEQ", desc: "3D spectrum visualization (32-channel GEQ)", audio_reactive: true, supports_audio_toggle: false },
+      { name: "Energy Waves", desc: "Energy waves (LEDFx)", audio_reactive: true, supports_audio_toggle: false },
+      { name: "Plasma", desc: "Animated gradients", audio_reactive: true, supports_audio_toggle: false },
+      { name: "Matrix", desc: "Matrix-style falling glyphs", audio_reactive: true, supports_audio_toggle: false },
+      { name: "Hyperspace", desc: "Deep-space warp lines", audio_reactive: true, supports_audio_toggle: false },
+      { name: "Waves", desc: "Smooth rolling gradients", audio_reactive: true, supports_audio_toggle: false },
+      { name: "Aura", desc: "Soft ambient glow", audio_reactive: true, supports_audio_toggle: false },
+      { name: "Ripple Flow", desc: "Ripples moving across LEDs", audio_reactive: true, supports_audio_toggle: false },
+      { name: "Rain", desc: "Falling drops with cool tones", audio_reactive: true, supports_audio_toggle: true },
+      { name: "Fire", desc: "Fire effect (LEDFx)", audio_reactive: true, supports_audio_toggle: true },
     ],
   },
 ];
+
+// Helper: Check if effect supports audio toggle
+function effectSupportsAudioToggle(effectName) {
+  for (const group of EFFECT_LIBRARY) {
+    for (const eff of group.effects) {
+      if (eff.name === effectName) {
+        return eff.supports_audio_toggle || false;
+      }
+    }
+  }
+  return false;
+}
+
+// Helper: Check if effect is audio-reactive
+function effectIsAudioReactive(effectName) {
+  for (const group of EFFECT_LIBRARY) {
+    for (const eff of group.effects) {
+      if (eff.name === effectName) {
+        return eff.audio_reactive || false;
+      }
+    }
+  }
+  return false;
+}
+
+// Helper: Auto-select engine based on effect and audio_link
+function selectEngineAuto(effectName, audioLink) {
+  // Find effect metadata
+  for (const group of EFFECT_LIBRARY) {
+    for (const eff of group.effects) {
+      if (eff.name === effectName) {
+        // LEDFx-only effects (require audio)
+        if (eff.audio_reactive && !eff.supports_audio_toggle) {
+          return "ledfx";
+        }
+        // Effects that support audio toggle
+        if (eff.supports_audio_toggle && audioLink) {
+          // WLED audio-reactive effects stay in WLED engine
+          if (group.category.includes("WLED")) {
+            return "wled";
+          } else {
+            return "ledfx";
+          }
+        }
+        // Audio-reactive effects with audio enabled
+        if (eff.audio_reactive && audioLink) {
+          if (group.category.includes("WLED")) {
+            return "wled";
+          } else {
+            return "ledfx";
+          }
+        }
+        // Default: WLED for non-audio, or based on category
+        if (group.category.includes("WLED")) {
+          return "wled";
+        } else if (group.category.includes("LEDFx")) {
+          return "ledfx";
+        } else {
+          return "wled";  // Default to WLED
+        }
+      }
+    }
+  }
+  // Unknown effect - default to WLED
+  return "wled";
+}
 
 // Default values for each effect - matching WLED and LEDFx defaults
 // Based on WLED source code and LEDFx documentation
@@ -560,7 +626,7 @@ function renderLang() {
     renderDevicePreview();
   }
   renderWledDevices();
-  renderEffectCatalog("wled"); // Default to WLED
+  renderEffectCatalog(false); // Show all effects (unified list)
   renderLedConfig();
   renderLightsDashboard();
   updateControlButtons();
@@ -571,59 +637,33 @@ function renderLang() {
   }
 }
 
-function renderEffectCatalog(engine) {
+function renderEffectCatalog(audioReactiveOnly = false) {
   const list = qs("effectCatalog");
   if (!list) {
     console.warn("renderEffectCatalog: effectCatalog datalist not found");
     return;
   }
-  // Filter effects by engine - WLED and LEDFx have separate effect lists
+  // Unified effect list - filter by audio-reactive flag if needed
   let effects = [];
-  if (engine === "wled") {
-    // WLED effects - get from EFFECT_LIBRARY where engine is "wled"
-    for (const group of EFFECT_LIBRARY) {
-      for (const eff of group.effects) {
-        if (eff.engine === "wled" && !effects.includes(eff.name)) {
+  for (const group of EFFECT_LIBRARY) {
+    for (const eff of group.effects) {
+      if (audioReactiveOnly) {
+        // Show only audio-reactive effects
+        if (eff.audio_reactive && !effects.includes(eff.name)) {
           effects.push(eff.name);
         }
-      }
-    }
-    // Also include basic effects from EFFECT_CATALOG (these are WLED effects)
-    for (const name of EFFECT_CATALOG) {
-      if (!effects.includes(name)) {
-        effects.push(name);
-      }
-    }
-  } else if (engine === "ledfx") {
-    // LEDFx effects - ONLY get from EFFECT_LIBRARY where engine is "ledfx"
-    // DO NOT include EFFECT_CATALOG as those are WLED effects
-    for (const group of EFFECT_LIBRARY) {
-      for (const eff of group.effects) {
-        if (eff.engine === "ledfx" && !effects.includes(eff.name)) {
-          effects.push(eff.name);
-        }
-      }
-    }
-  } else {
-    // Unknown engine - include all effects
-    console.warn(`renderEffectCatalog: Unknown engine "${engine}", including all effects`);
-    for (const group of EFFECT_LIBRARY) {
-      for (const eff of group.effects) {
+      } else {
+        // Show all effects
         if (!effects.includes(eff.name)) {
           effects.push(eff.name);
         }
-      }
-    }
-    for (const name of EFFECT_CATALOG) {
-      if (!effects.includes(name)) {
-        effects.push(name);
       }
     }
   }
   // Sort effects alphabetically for better UX
   effects.sort();
   list.innerHTML = effects.map((name) => `<option value="${name}"></option>`).join("");
-  console.log(`renderEffectCatalog(${engine}): ${effects.length} effects`, effects.slice(0, 10), "...");
+  console.log(`renderEffectCatalog(${audioReactiveOnly ? "audio-reactive only" : "all"}): ${effects.length} effects`, effects.slice(0, 10), "...");
 }
 
 function stopAutoRefreshLoops() {
@@ -2299,24 +2339,34 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
     <div class="device-meta-grid">
       <div class="device-meta"><strong>${t("colSegName") || "Name"}</strong><span>${name}</span></div>
       <div class="device-meta"><strong>${t("colSegLeds") || "LEDs"}</strong><span>${segment?.led_count ?? "-"}</span></div>
-      <div class="device-meta"><strong>${t("fx_engine_label") || "Effect Engine"}</strong><span>${assignment.engine || "wled"}</span></div>
+      <div class="device-meta"><strong>${t("fx_engine_label") || "Effect Engine"}</strong><span id="fxEngineDisplay">${selectEngineAuto(assignment.effect || "Solid", assignment.audio_link || false)}</span></div>
     </div>
     <details class="fx-section-category" open>
       <summary class="fx-section-header">${t("fx_basic_title") || "Basic Settings"}</summary>
       <div class="form-grid" style="margin-top: 1rem;">
-        <label>${t("fx_engine_label") || "Effect Engine"}
-          <select id="devFxEngine">
-            <option value="wled" ${assignment.engine === "wled" ? "selected" : ""}>WLED (time-based, no audio)</option>
-            <option value="ledfx" ${assignment.engine === "ledfx" ? "selected" : ""}>LEDFx (audio-reactive)</option>
-          </select>
-          <small class="muted">${t("fx_engine_desc") || "WLED = time-based animations, LEDFx = audio-reactive effects"}</small>
-        </label>
         <label style="grid-column: span 2;">${t("fx_effect_label") || "Effect Name"}
           <select id="devFxEffect">
             <option value="">Loading...</option>
           </select>
           <small class="muted" id="fxEffectDescription" style="display: block; margin-top: 0.25rem;"></small>
         </label>
+        ${effectSupportsAudioToggle(assignment.effect || "") ? `
+        <label class="switch" style="grid-column: span 2;">
+          <input type="checkbox" id="devFxAudioLink" ${assignment.audio_link ? "checked" : ""}>
+          <span></span> ${t("fx_audio_link_label") || "Audio Reactive"}
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_link_desc") || "Enable audio reactivity for this effect. Engine will be selected automatically."}</small>
+        </label>
+        ` : effectIsAudioReactive(assignment.effect || "") ? `
+        <label class="switch" style="grid-column: span 2;">
+          <input type="checkbox" id="devFxAudioLink" ${assignment.audio_link !== false ? "checked" : ""} disabled>
+          <span></span> ${t("fx_audio_link_label") || "Audio Reactive"} <span class="badge">Required</span>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_required_desc") || "This effect requires audio reactivity and is always enabled."}</small>
+        </label>
+        ` : `
+        <div style="grid-column: span 2; padding: 0.5rem; background: var(--bg-secondary); border-radius: 4px;">
+          <small class="muted">${t("fx_audio_not_supported") || "This effect does not support audio reactivity."}</small>
+        </div>
+        `}
         <label>${t("fx_preset_label") || "Preset Name (Optional)"}
           <input id="devFxPreset" value="${assignment.preset || ''}" placeholder="Optional preset name">
           <small class="muted">${t("fx_preset_desc") || "Optional name to save/load this effect configuration"}</small>
@@ -2426,21 +2476,21 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
         </label>
       </div>
     </details>
-    ${assignment.engine !== "wled" ? `
+    ${(assignment.audio_link && (effectIsAudioReactive(assignment.effect || "") || selectEngineAuto(assignment.effect || "Solid", true) === "ledfx")) ? `
     <details class="fx-section-category" open>
       <summary class="fx-section-header">${t("fx_audio_title") || "Audio Reactive"}</summary>
       <div class="form-grid" style="margin-top: 1rem;">
         <label>${t("fx_audio_profile_label") || "Audio Response Profile"}
-          <select id="devFxAudioProfile" ${assignment.engine === "wled" ? "disabled" : ""}>
+          <select id="devFxAudioProfile">
             ${renderAudioProfileOptions(assignment.audio_profile || "default")}
           </select>
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${assignment.engine === "wled" ? (t("fx_audio_only_ledfx") || "Only for LEDFx effects") : (t("fx_audio_profile_desc") || "Predefined audio processing profile (default, energy, tempo, etc.)")}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_profile_desc") || "Predefined audio processing profile (default, energy, tempo, etc.)"}</small>
         </label>
         <label>${t("fx_audio_mode_label") || "Audio Analysis Mode"}
-          <select id="devFxAudioMode" ${assignment.engine === "wled" ? "disabled" : ""}>
+          <select id="devFxAudioMode">
             ${renderAudioModeOptions(assignment.audio_mode || "spectrum")}
           </select>
-          <small class="muted" style="display: block; margin-top: 0.25rem;">${assignment.engine === "wled" ? (t("fx_audio_only_ledfx") || "Only for LEDFx effects") : (t("fx_audio_mode_desc") || "How audio is analyzed: Spectrum (frequency bands), Energy (overall level), Beat (rhythm detection)")}</small>
+          <small class="muted" style="display: block; margin-top: 0.25rem;">${t("fx_audio_mode_desc") || "How audio is analyzed: Spectrum (frequency bands), Energy (overall level), Beat (rhythm detection)")}</small>
         </label>
         <label style="grid-column: 1 / -1;">${t("fx_audio_bands_label") || "Frequency Bands / Audio Metrics"}
           <div id="devFxBandsContainer" style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem;">
@@ -2449,7 +2499,7 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
               if (bands.length === 0) {
                 // If no bands selected, show reactive_mode as fallback
                 return `<div class="band-selector-row" data-idx="0">
-                  <select class="band-select" data-idx="0" ${assignment.engine === "wled" ? "disabled" : ""}>
+                  <select class="band-select" data-idx="0">
                     <option value="">${t("fx_audio_use_reactive_mode") || "Use reactive mode"}</option>
                     <option value="sub_bass">Sub Bass (20-60 Hz)</option>
                     <option value="bass_low">Bass Low (60-120 Hz)</option>
@@ -2472,7 +2522,7 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
               }
               return bands.map((band, idx) => `
                 <div class="band-selector-row" data-idx="${idx}">
-                  <select class="band-select" data-idx="${idx}" ${assignment.engine === "wled" ? "disabled" : ""}>
+                  <select class="band-select" data-idx="${idx}">
                     <option value="sub_bass" ${band === "sub_bass" ? "selected" : ""}>Sub Bass (20-60 Hz)</option>
                     <option value="bass_low" ${band === "bass_low" ? "selected" : ""}>Bass Low (60-120 Hz)</option>
                     <option value="bass_high" ${band === "bass_high" ? "selected" : ""}>Bass High (120-250 Hz)</option>
@@ -2632,11 +2682,11 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
     ` : ''}
   `;
 
-  // Update effect catalog for the current engine BEFORE setting up event listeners
-  renderEffectCatalog(assignment.engine || "wled");
+  // Update effect catalog - show all effects (unified list)
+  renderEffectCatalog(false);  // false = show all effects, not just audio-reactive
   
   // Load effects asynchronously and populate the select
-  renderEffectOptions(assignment.engine || "wled", assignment.effect || "").then(options => {
+  renderEffectOptions(assignment.effect || "").then(options => {
     const select = qs("devFxEffect");
     if (select) {
       select.innerHTML = options;
@@ -2671,18 +2721,21 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
     }
   });
 
-  qs("devFxEngine")?.addEventListener("change", async (ev) => {
-    assignment.engine = ev.target.value || assignment.engine;
-    // Set audio_link based on engine: LEDFx = true, WLED = false
-    assignment.audio_link = (assignment.engine !== "wled");
-    // Update effect catalog for the selected engine
-    renderEffectCatalog(assignment.engine);
-    // Update effect select dropdown
-    const effectSelect = qs("devFxEffect");
-    if (effectSelect) {
-      effectSelect.innerHTML = await renderEffectOptions(assignment.engine, assignment.effect || "");
+  // Audio link toggle - automatically selects engine
+  qs("devFxAudioLink")?.addEventListener("change", async (ev) => {
+    assignment.audio_link = ev.target.checked;
+    
+    // Auto-select engine based on effect and audio_link
+    const selectedEngine = selectEngineAuto(assignment.effect || "Solid", assignment.audio_link);
+    assignment.engine = selectedEngine;
+    
+    // Update engine display
+    const engineDisplay = qs("fxEngineDisplay");
+    if (engineDisplay) {
+      engineDisplay.textContent = selectedEngine.toUpperCase();
     }
-    // Re-render form to update disabled states (only if not WLED - WLED uses different container)
+    
+    // Re-render form to update audio settings visibility
     if (!isWled) {
       renderEffectDetailForm(qs("fxDetailForm"), null, assignment, false);
     }
@@ -2692,6 +2745,21 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
     const effectName = ev.target.value || "";
     assignment.effect = effectName;
     
+    // Auto-select engine based on effect and audio_link
+    const selectedEngine = selectEngineAuto(effectName, assignment.audio_link || false);
+    assignment.engine = selectedEngine;
+    
+    // If effect requires audio and audio_link is false, enable it
+    if (effectIsAudioReactive(effectName) && !effectSupportsAudioToggle(effectName)) {
+      assignment.audio_link = true;  // Required for this effect
+    }
+    
+    // Update engine display
+    const engineDisplay = qs("fxEngineDisplay");
+    if (engineDisplay) {
+      engineDisplay.textContent = selectedEngine.toUpperCase();
+    }
+    
     // For WLED devices, ensure binding.effect is properly structured
     if (isWled && wledBinding) {
       // Ensure binding.effect is an object
@@ -2700,14 +2768,12 @@ function renderEffectDetailForm(target, segment, assignment, isWled = false, wle
       }
       // Set the effect name
       wledBinding.effect.effect = effectName;
-      // Ensure engine is set
-      if (!wledBinding.effect.engine) {
-        wledBinding.effect.engine = "wled";
-      }
+      // Set engine (auto-selected)
+      wledBinding.effect.engine = selectedEngine;
       
       // Apply effect-specific defaults (colors, brightness, etc.)
       if (effectName) {
-        applyEffectDefaults(wledBinding.effect, effectName, "wled", true);
+        applyEffectDefaults(wledBinding.effect, effectName, selectedEngine, true);
       }
       
       // Ensure default values are set (fallback if applyEffectDefaults didn't set them)
@@ -4058,40 +4124,15 @@ async function loadEffectsForEngine(engine) {
   }
 }
 
-async function renderEffectOptions(engine, current) {
+async function renderEffectOptions(current) {
   let effects = [];
   
-  // Load effects from JSON file
-  const effectsData = await loadEffectsForEngine(engine);
-  
-  if (effectsData && Array.isArray(effectsData)) {
-    // Use effects from JSON file
-    for (const group of effectsData) {
-      if (group.effects && Array.isArray(group.effects)) {
-        for (const eff of group.effects) {
-          if (!effects.find(e => e.name === eff.name)) {
-            effects.push({ name: eff.name, category: group.category });
-          }
-        }
-      }
-    }
-  } else {
-    // Fallback to EFFECT_LIBRARY if JSON files are not available
-    if (engine === "wled") {
-      for (const group of EFFECT_LIBRARY) {
-        for (const eff of group.effects) {
-          if (eff.engine === "wled" && !effects.find(e => e.name === eff.name)) {
-            effects.push({ name: eff.name, category: group.category });
-          }
-        }
-      }
-    } else {
-      for (const group of EFFECT_LIBRARY) {
-        for (const eff of group.effects) {
-          if (eff.engine === "ledfx" && !effects.find(e => e.name === eff.name)) {
-            effects.push({ name: eff.name, category: group.category });
-          }
-        }
+  // Unified effect list - show all effects from EFFECT_LIBRARY
+  // Engine will be selected automatically based on effect and audio_link
+  for (const group of EFFECT_LIBRARY) {
+    for (const eff of group.effects) {
+      if (!effects.find(e => e.name === eff.name)) {
+        effects.push({ name: eff.name, category: group.category });
       }
     }
   }
@@ -4122,7 +4163,7 @@ function renderEffectPicker(current) {
   const select = qs("fxEffectPicker");
   if (!select) return;
   const assignment = ensureEffectAssignment(state.selectedFxSegment);
-  const options = renderEffectOptions(assignment.engine || "wled", current);
+  const options = renderEffectOptions(current);
   select.innerHTML = `<option value="">${t("pin_select")}</option>${options}`;
 }
 
@@ -4816,25 +4857,27 @@ function handleEffectPickerChange(event) {
   
   // If effect changed, apply defaults for the new effect
   if (newEffect && newEffect !== oldEffect) {
-    // Find the engine for this effect
-    let engine = assign.engine || "wled";
-    for (const group of EFFECT_LIBRARY) {
-      for (const eff of group.effects) {
-        if (eff.name === newEffect) {
-          engine = eff.engine || engine;
-          break;
-        }
-      }
+    // Auto-select engine based on effect and current audio_link setting
+    const selectedEngine = selectEngineAuto(newEffect, assign.audio_link || false);
+    assign.engine = selectedEngine;
+    
+    // If effect requires audio and audio_link is false, enable it
+    if (effectIsAudioReactive(newEffect) && !effectSupportsAudioToggle(newEffect)) {
+      assign.audio_link = true;  // Required for this effect
     }
     
-    // Update engine if needed
-    assign.engine = engine;
-    
     // Apply effect-specific defaults
-    applyEffectDefaults(assign, newEffect, engine, true);
+    applyEffectDefaults(assign, newEffect, selectedEngine, true);
   }
   
   assign.effect = newEffect;
+  
+  // Update engine display
+  const engineDisplay = qs("fxEngineDisplay");
+  if (engineDisplay) {
+    engineDisplay.textContent = selectEngineAuto(newEffect, assign.audio_link || false).toUpperCase();
+  }
+  
   const led = ensureLedEngineConfig();
   renderEffectRows(led);
   renderFxDetail();
@@ -6349,7 +6392,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   console.log("Document ready, URL:", window.location.href);
   try {
     console.log("DOMContentLoaded: Step 1 - Rendering effect catalog");
-    renderEffectCatalog("wled"); // Default to WLED
+    renderEffectCatalog(false); // Show all effects (unified list)
     console.log("DOMContentLoaded: Step 2 - Binding navigation");
     bindNavigation();
     console.log("DOMContentLoaded: Step 3 - Initializing events");

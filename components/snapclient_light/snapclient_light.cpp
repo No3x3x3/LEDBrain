@@ -458,6 +458,100 @@ void compute_metrics(const int16_t* pcm, size_t samples, uint32_t sample_rate, b
   metrics.beat = std::min(1.0f, beat_envelope);
   metrics.tempo_bpm = tempo_bpm;
   
+  // Calculate 32-channel GEQ (Graphic Equalizer) - logarithmically spaced bands from 20Hz to 20kHz
+  // This provides high-precision frequency analysis for advanced audio-reactive effects
+  const float freq_min = 20.0f;
+  const float freq_max = 20000.0f;
+  const float log_freq_min = logf(freq_min);
+  const float log_freq_max = logf(freq_max);
+  const float log_range = log_freq_max - log_freq_min;
+  const float bin_hz = static_cast<float>(sample_rate) / static_cast<float>(actual_fft_size);
+  
+  for (int i = 0; i < 32; ++i) {
+    // Logarithmically spaced frequency bands
+    const float log_pos = log_freq_min + (log_range * static_cast<float>(i) / 31.0f);
+    const float freq_center = expf(log_pos);
+    
+    // Calculate band width (wider bands at lower frequencies, narrower at higher)
+    float band_width;
+    if (i == 0) {
+      band_width = freq_center * 0.5f;  // First band: 50% of center frequency
+    } else if (i == 31) {
+      band_width = freq_center * 0.3f;  // Last band: 30% of center frequency
+    } else {
+      // Band width is approximately 1/32 of the logarithmic range
+      const float prev_log = log_freq_min + (log_range * static_cast<float>(i - 1) / 31.0f);
+      const float next_log = log_freq_min + (log_range * static_cast<float>(i + 1) / 31.0f);
+      const float prev_freq = expf(prev_log);
+      const float next_freq = expf(next_log);
+      band_width = (next_freq - prev_freq) * 0.5f;
+    }
+    
+    const float freq_low = std::max(freq_min, freq_center - band_width * 0.5f);
+    const float freq_high = std::min(freq_max, freq_center + band_width * 0.5f);
+    
+    // Calculate energy for this band
+    size_t i_low = static_cast<size_t>(freq_low / bin_hz);
+    size_t i_high = static_cast<size_t>(freq_high / bin_hz);
+    i_low = std::min(i_low, magn.size() - 1);
+    i_high = std::min(i_high, magn.size() - 1);
+    
+    if (i_low <= i_high) {
+      float band_energy_val = compute_band_energy_simd(magn.data(), i_low, i_high);
+      // Apply frequency-dependent gain (lower frequencies need more gain)
+      const float gain = 1.0f + (freq_center < 200.0f ? 4.0f : (freq_center < 1000.0f ? 2.0f : 1.0f));
+      metrics.geq_bands[i] = std::min(1.5f, band_energy_val * gain);
+    } else {
+      metrics.geq_bands[i] = 0.0f;
+    }
+  }
+  
+  // Apply Audio Dynamic Limiter - compress dynamic range to prevent clipping
+  // This ensures stable levels even with loud music
+  static float limiter_threshold = 0.85f;  // Threshold above which to compress
+  static float limiter_ratio = 4.0f;       // Compression ratio (4:1)
+  static float limiter_attack = 0.95f;     // Attack coefficient (fast response)
+  static float limiter_release = 0.98f;    // Release coefficient (slow recovery)
+  static float limiter_gain = 1.0f;        // Current gain reduction
+  
+  // Find peak level across all GEQ bands
+  float peak_level = 0.0f;
+  for (int i = 0; i < 32; ++i) {
+    if (metrics.geq_bands[i] > peak_level) {
+      peak_level = metrics.geq_bands[i];
+    }
+  }
+  // Also check overall energy
+  if (metrics.energy > peak_level) {
+    peak_level = metrics.energy;
+  }
+  
+  // Calculate required gain reduction
+  float target_gain = 1.0f;
+  if (peak_level > limiter_threshold) {
+    const float excess = peak_level - limiter_threshold;
+    const float reduction = excess / limiter_ratio;
+    target_gain = limiter_threshold / (limiter_threshold + reduction);
+  }
+  
+  // Smooth gain changes (attack/release)
+  if (target_gain < limiter_gain) {
+    // Attack: fast response to peaks
+    limiter_gain = limiter_gain * limiter_attack + target_gain * (1.0f - limiter_attack);
+  } else {
+    // Release: slow recovery
+    limiter_gain = limiter_gain * limiter_release + target_gain * (1.0f - limiter_release);
+  }
+  
+  // Apply limiter to GEQ bands and overall energy
+  for (int i = 0; i < 32; ++i) {
+    metrics.geq_bands[i] *= limiter_gain;
+  }
+  metrics.energy *= limiter_gain;
+  metrics.bass *= limiter_gain;
+  metrics.mid *= limiter_gain;
+  metrics.treble *= limiter_gain;
+  
   // Store magnitude spectrum for custom frequency range calculations
   metrics.magnitude_spectrum = magn;
   metrics.sample_rate = sample_rate;
@@ -618,8 +712,9 @@ esp_err_t snapclient_light_start(const SnapcastConfig& cfg) {
   }
   s_running = true;
   // Pin to Core 1 for real-time audio processing (isolated from network/system tasks)
-  // Higher priority (6) than LED effects (5) to ensure audio processing doesn't lag
-  const BaseType_t res = xTaskCreatePinnedToCore(snap_task, "snapclient", 4096, nullptr, 6, &s_task, 1);
+  // High priority (9) - audio processing must complete before LED rendering
+  // Higher than LED effects (8) to ensure audio metrics are ready for effects
+  const BaseType_t res = xTaskCreatePinnedToCore(snap_task, "snapclient", 4096, nullptr, 9, &s_task, 1);
   if (res != pdPASS) {
     s_running = false;
     s_task = nullptr;

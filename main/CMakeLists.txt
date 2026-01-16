@@ -14,6 +14,7 @@ idf_component_register(
       "wled_discovery.cpp"
       "wled_effects.cpp"
       "ledfx_effects.cpp"
+      "effect_engine_selector.cpp"  # Automatic engine selection based on effect and audio
       "ota.cpp"
       "temperature_monitor.cpp"
   INCLUDE_DIRS "."
